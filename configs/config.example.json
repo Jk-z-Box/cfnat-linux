@@ -1,0 +1,39 @@
+{
+  "config_version": 3,
+  "listen": "0.0.0.0:1234",
+  "ip_version": 4,
+  "ip_sources": [
+    "https://www.cloudflare.com/ips-v4"
+  ],
+  "random_ips": true,
+  "max_candidates": 2000,
+  "valid_ip_count": 20,
+  "pool_size": 10,
+  "concurrency": 100,
+  "target_port": 443,
+  "tls": true,
+  "tls_server_name": "",
+  "insecure_skip_verify": false,
+  "check_url": "https://cloudflare.com/cdn-cgi/trace",
+  "expected_status": 200,
+  "max_latency": "800ms",
+  "dial_timeout": "3s",
+  "colos": [],
+  "scan_interval": "6h",
+  "health_interval": "60s",
+  "health_failures": 3,
+  "state_file": "/var/lib/cfnat/state.json",
+  "source_cache_dir": "/var/lib/cfnat/ip-cache",
+  "log_level": "info",
+  "cloudflare_dns": {
+    "enabled": false,
+    "zone_id": "",
+    "record_name": "best.example.com",
+    "record_type": "auto",
+    "sync_count": 1,
+    "ttl": 1,
+    "proxied": false,
+    "token_env": "CF_API_TOKEN",
+    "marker": "managed-by:cfnat-linux"
+  }
+}

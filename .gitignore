@@ -1,0 +1,26 @@
+# macOS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Local runtime/config generated on Linux hosts
+cfnat.env
+config.json
+*.log
+*.pid
+
+# Build/test scratch
+coverage.out
+*.test
+tmp/
+temp/
+
+# Secrets
+*.key
+*.pem
+*.token
+.env
+.env.*
+
