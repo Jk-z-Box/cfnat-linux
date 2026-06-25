@@ -1,36 +1,36 @@
 # cfnat-linux
 
-面向 Linux 的 Cloudflare IP 优选、TCP 转发、健康检查和 DNS 自动同步服务。
+面向 Linux 的 Cloudflare IP 優選、TCP 轉發、健康檢查與 DNS 自動同步服務。
 
-它参考了 `amclubs-cfnat` 的工作方式，但核心代码为独立实现，不依赖原项目未公开的二进制源码。
+它參考了 `amclubs-cfnat` 的工作方式，但核心程式碼為獨立實作，不依賴原專案未公開的二進位原始碼。
 
 ## 功能
 
-- 从本地文件或 HTTP(S) 地址读取 IPv4/IPv6 CIDR 或裸 IP，并缓存成功下载的远程 IP 池。
-- 随机抽样或按顺序展开候选 IP。
-- 两阶段扫描：先进行轻量 TCP 初筛，再对最快候选执行 TLS、HTTP 状态码和延迟检查，避免大并发完整请求触发限速。
-- 可通过 `/cdn-cgi/trace` 按 Cloudflare `colo` 筛选数据中心。
-- 维护低延迟目标池，为本地连接进行轮询 TCP 透传。
-- 定期健康检查；连续失败后重新优选并无损替换目标池。
-- 将前 N 个优选 IP 同步为 Cloudflare `A` 或 `AAAA` 记录。
-- DNS 采用“先创建新记录、再删除旧记录”，扫描失败时绝不清空解析。
-- systemd 开机启动、自动重启、journald 日志和低权限运行。
-- 首次扫描无结果时保持后台运行并定期重试，不再进入 systemd 重启循环。
-- 支持 Linux amd64、arm64 和 386。
+- 從本機檔案或 HTTP(S) 位址讀取 IPv4/IPv6 CIDR 或裸 IP，並快取成功下載的遠端 IP 池。
+- 隨機抽樣或依順序展開候選 IP。
+- 兩階段掃描：先進行輕量 TCP 初篩，再對最快候選執行 TLS、HTTP 狀態碼與延遲檢查，避免大併發完整請求觸發限速。
+- 可透過 `/cdn-cgi/trace` 依 Cloudflare `colo` 篩選資料中心。
+- 維護低延遲目標池，為本機連線進行輪詢 TCP 透傳。
+- 定期健康檢查；連續失敗後重新優選並無損替換目標池。
+- 將前 N 個優選 IP 同步為 Cloudflare `A` 或 `AAAA` 記錄。
+- DNS 採用「先建立新記錄、再刪除舊記錄」，掃描失敗時絕不清空解析。
+- systemd 開機啟動、自動重啟、journald 日誌與低權限執行。
+- 首次掃描無結果時保持背景執行並定期重試，不再進入 systemd 重啟循環。
+- 支援 Linux amd64、arm64 和 386。
 
 ## 工作流程
 
 ```text
-IP/CIDR 来源 → 候选生成 → TCP 初筛 → TLS/HTTP 复筛 → 延迟排序 → 目标池 → TCP 转发
+IP/CIDR 來源 → 候選生成 → TCP 初篩 → TLS/HTTP 複篩 → 延遲排序 → 目標池 → TCP 轉發
                                   ↓
                          Cloudflare DNS 同步
                                   ↓
-                      定时健康检查与重新优选
+                      定時健康檢查與重新優選
 ```
 
-## 一键安装
+## 一鍵安裝
 
-安装机需要 systemd、curl、tar 和 sha256sum。若系统没有 Go，安装脚本会下载经过 SHA-256 校验的临时官方 Go 工具链；编译完成后自动删除，不污染系统环境。
+安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
 tar -xzf cfnat-linux-v0.3.0.tar.gz
@@ -38,98 +38,98 @@ cd cfnat-linux
 sudo ./scripts/install.sh
 ```
 
-安装脚本会交互询问：
+安裝腳本會互動詢問：
 
-- 本地监听地址；
+- 本機監聽位址；
 - IPv4 或 IPv6；
-- 最大允许延迟（毫秒）；
-- 可选 Cloudflare 数据中心；
+- 最大允許延遲（毫秒）；
+- 可選 Cloudflare 資料中心；
 - 是否同步 DNS；
-- Zone ID、完整记录名和 API Token。
+- Zone ID、完整記錄名稱和 API Token。
 
-向导会逐项检查输入格式。地址、端口、IP 版本、数据中心代码或 DNS 参数有误时，会说明原因并重新询问当前项目，不会退出整个安装过程。
+精靈會逐項檢查輸入格式。位址、連接埠、IP 版本、資料中心代碼或 DNS 參數有誤時，會說明原因並重新詢問目前項目，不會退出整個安裝流程。
 
-安装完成后服务会立即进行首次优选。运行管理面板：
+安裝完成後服務會立即進行首次優選。執行管理面板：
 
 ```bash
 sudo cfnatctl
 ```
 
-面板会展示：
+面板會顯示：
 
-- systemd 服务是否运行；
-- 监听 IP、端口和最大允许延迟；
-- 扫描正在进行、已经完成或失败；
-- 当前最优 IP；
-- 优选池每个 IP 的延迟、colo 和健康状态；
-- Cloudflare DNS 是否启用、是否同步成功、解析域名和同步 IP。
+- systemd 服務是否執行；
+- 監聽 IP、連接埠和最大允許延遲；
+- 掃描正在進行、已經完成或失敗；
+- 目前最優 IP；
+- 優選池每個 IP 的延遲、colo 和健康狀態；
+- Cloudflare DNS 是否啟用、是否同步成功、解析網域和同步 IP。
 
-面板下方提供运行开关、立即重扫、诊断扫描、修改配置、实时日志以及一键关闭并卸载。运行状态同时保存于 `/var/lib/cfnat/state.json`。
+面板下方提供執行開關、立即重掃、診斷掃描、修改設定、即時日誌以及一鍵關閉並解除安裝。執行狀態同時儲存於 `/var/lib/cfnat/state.json`。
 
-扫描日志会汇总失败原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。这样可以直接判断是线路不可达、TLS/SNI、探测网址、延迟阈值还是机房筛选导致无结果。
+掃描日誌會彙總失敗原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。這樣可以直接判斷是線路不可達、TLS/SNI、探測網址、延遲閾值還是機房篩選導致無結果。
 
 也可以直接使用命令：
 
 ```bash
-cfnatctl status       # 服务状态
-cfnatctl logs         # 实时日志
-cfnatctl pool         # 当前优选池
-cfnatctl scan         # 重启服务并立即重新优选
-cfnatctl config       # 进入配置修改菜单
-cfnatctl restart      # 重启服务
-cfnatctl uninstall    # 确认后关闭并卸载
+cfnatctl status       # 服務狀態
+cfnatctl logs         # 即時日誌
+cfnatctl pool         # 目前優選池
+cfnatctl scan         # 重啟服務並立即重新優選
+cfnatctl config       # 進入設定修改選單
+cfnatctl restart      # 重啟服務
+cfnatctl uninstall    # 確認後關閉並解除安裝
 ```
 
-## Cloudflare DNS 配置
+## Cloudflare DNS 設定
 
-建议创建一个仅限目标 Zone 的 API Token，权限为：
+建議建立一個僅限目標 Zone 的 API Token，權限為：
 
 ```text
 Zone / DNS / Edit
 ```
 
-Token 保存于 `/etc/cfnat/cfnat.env`，权限为 `0640`，不会写入 JSON、命令行或日志。
+Token 儲存於 `/etc/cfnat/cfnat.env`，權限為 `0640`，不會寫入 JSON、命令列或日誌。
 
-优选记录必须保持：
+優選記錄必須保持：
 
 ```json
 "proxied": false
 ```
 
-如果开启橙云，DNS 响应会重新变成 Cloudflare Anycast 地址，客户端无法直接得到优选 IP。程序会拒绝 `proxied=true` 配置。
+如果開啟橙雲，DNS 回應會重新變成 Cloudflare Anycast 位址，客戶端無法直接取得優選 IP。程式會拒絕 `proxied=true` 設定。
 
-DNS 同步只删除 `comment` 等于 `managed-by:cfnat-linux` 的旧记录，不删除同域名下由用户创建的记录。为避免短暂空解析，它总是先创建新记录，再删除旧记录。
+DNS 同步只刪除 `comment` 等於 `managed-by:cfnat-linux` 的舊記錄，不刪除同網域名稱下由使用者建立的記錄。為避免短暫空解析，它總是先建立新記錄，再刪除舊記錄。
 
-## 配置文件
+## 設定檔
 
-主配置位于 `/etc/cfnat/config.json`，完整示例见 `configs/config.example.json`。
+主設定位於 `/etc/cfnat/config.json`，完整範例見 `configs/config.example.json`。
 
-关键参数：
+關鍵參數：
 
-| 参数 | 默认值 | 说明 |
+| 參數 | 預設值 | 說明 |
 |---|---:|---|
-| `listen` | `0.0.0.0:1234` | 本地 TCP 监听地址 |
+| `listen` | `0.0.0.0:1234` | 本機 TCP 監聽位址 |
 | `ip_version` | `4` | `4` 或 `6` |
-| `ip_sources` | Cloudflare 官方列表 | CIDR 文件或 URL，可配置多个 |
-| `max_candidates` | `2000` | 单轮最多探测的候选数 |
-| `concurrency` | `100` | TCP 初筛并发数；完整 TLS/HTTP 复筛自动限制为最多 20 |
-| `valid_ip_count` | `20` | 保留的有效 IP 数 |
-| `pool_size` | `10` | TCP 转发目标池大小 |
-| `target_port` | `443` | 上游 Cloudflare 端口 |
-| `check_url` | `https://cloudflare.com/cdn-cgi/trace` | HTTP 状态检查地址及 TLS SNI 来源 |
-| `expected_status` | `200` | 期望响应码 |
-| `max_latency` | `800ms` | TLS/HTTP 首包最大延迟；超过阈值的 IP 直接淘汰 |
-| `colos` | `[]` | 例如 `HKG`、`NRT`、`SJC`；空数组不筛选 |
-| `scan_interval` | `6h` | 定期完整重选周期 |
-| `health_interval` | `60s` | 当前池健康检查周期 |
-| `health_failures` | `3` | 连续失败多少次后重选 |
-| `source_cache_dir` | `/var/lib/cfnat/ip-cache` | 远程 IP 池成功下载后的本地缓存目录 |
-| `cloudflare_dns.sync_count` | `1` | 同步排名前几个 IP |
-| `cloudflare_dns.ttl` | `1` | Cloudflare API 中 `1` 表示自动 TTL |
+| `ip_sources` | Cloudflare 官方清單 | CIDR 檔案或 URL，可設定多個 |
+| `max_candidates` | `2000` | 單輪最多探測的候選數 |
+| `concurrency` | `100` | TCP 初篩併發數；完整 TLS/HTTP 複篩自動限制為最多 20 |
+| `valid_ip_count` | `20` | 保留的有效 IP 數 |
+| `pool_size` | `10` | TCP 轉發目標池大小 |
+| `target_port` | `443` | 上游 Cloudflare 連接埠 |
+| `check_url` | `https://cloudflare.com/cdn-cgi/trace` | HTTP 狀態檢查位址及 TLS SNI 來源 |
+| `expected_status` | `200` | 期望回應碼 |
+| `max_latency` | `800ms` | TLS/HTTP 首包最大延遲；超過閾值的 IP 直接淘汰 |
+| `colos` | `[]` | 例如 `HKG`、`NRT`、`SJC`；空陣列不篩選 |
+| `scan_interval` | `6h` | 定期完整重選週期 |
+| `health_interval` | `60s` | 目前池健康檢查週期 |
+| `health_failures` | `3` | 連續失敗多少次後重選 |
+| `source_cache_dir` | `/var/lib/cfnat/ip-cache` | 遠端 IP 池成功下載後的本機快取目錄 |
+| `cloudflare_dns.sync_count` | `1` | 同步排名前幾個 IP |
+| `cloudflare_dns.ttl` | `1` | Cloudflare API 中 `1` 表示自動 TTL |
 
-### 使用自定义 IP 池
+### 使用自訂 IP 池
 
-创建 `/etc/cfnat/ips-v4.txt`：
+建立 `/etc/cfnat/ips-v4.txt`：
 
 ```text
 1.0.0.0/24
@@ -137,7 +137,7 @@ DNS 同步只删除 `comment` 等于 `managed-by:cfnat-linux` 的旧记录，不
 104.16.0.1
 ```
 
-修改配置：
+修改設定：
 
 ```json
 "ip_sources": [
@@ -146,14 +146,14 @@ DNS 同步只删除 `comment` 等于 `managed-by:cfnat-linux` 的旧记录，不
 ]
 ```
 
-然后执行：
+然後執行：
 
 ```bash
 cfnatctl check
 cfnatctl restart
 ```
 
-## 手动构建
+## 手動建置
 
 需要 Go 1.22 或更高版本：
 
@@ -162,13 +162,13 @@ make test
 make build
 ```
 
-生成三个 Linux 架构版本：
+生成三個 Linux 架構版本：
 
 ```bash
 make release VERSION=v0.3.0
 ```
 
-## 命令行
+## 命令列
 
 ```bash
 cfnat -config ./config.json check-config
@@ -179,27 +179,27 @@ cfnat -config ./config.json run
 cfnat version
 ```
 
-`scan` 仅输出扫描结果，不更新 DNS；DNS 只由常驻的 `run` 模式管理。
+`scan` 僅輸出掃描結果，不更新 DNS；DNS 只由常駐的 `run` 模式管理。
 
-再次运行安装脚本升级时，会保留已有配置；只有旧版默认的失效探测地址会迁移为新地址，用户自定义的 `check_url` 不会被覆盖。
+再次執行安裝腳本升級時，會保留既有設定；只有舊版預設的失效探測位址會遷移為新位址，使用者自訂的 `check_url` 不會被覆蓋。
 
-## 安全与运行边界
+## 安全與執行邊界
 
-- 服务以独立的 `cfnat` 系统用户运行。
-- systemd 开启文件系统、设备、权限和内核相关的沙箱限制。
-- 仅保留绑定低端口所需的 `CAP_NET_BIND_SERVICE`。
-- TLS 默认校验证书，除非明确设置 `insecure_skip_verify=true`。
-- 这是四层 TCP 透传，不终止 TLS，也不解析 VLESS、Trojan 等上层协议。
-- 程序只负责更新 Cloudflare DNS，不会创建 Zone、修改其他记录或代理状态。
+- 服務以獨立的 `cfnat` 系統使用者執行。
+- systemd 開啟檔案系統、裝置、權限和核心相關的沙箱限制。
+- 僅保留綁定低連接埠所需的 `CAP_NET_BIND_SERVICE`。
+- TLS 預設校驗憑證，除非明確設定 `insecure_skip_verify=true`。
+- 這是四層 TCP 透傳，不終止 TLS，也不解析 VLESS、Trojan 等上層協定。
+- 程式只負責更新 Cloudflare DNS，不會建立 Zone、修改其他記錄或代理狀態。
 
-请遵守服务器所在地及使用者所在地的法律法规。
+請遵守伺服器所在地及使用者所在地的法律法規。
 
-## 卸载
+## 解除安裝
 
 ```bash
 sudo ./scripts/uninstall.sh
 ```
 
-或进入 `sudo cfnatctl`，选择“一键关闭并卸载”。
+或進入 `sudo cfnatctl`，選擇「一鍵關閉並解除安裝」。
 
-卸载脚本保留 `/etc/cfnat` 和 `/var/lib/cfnat`，防止误删 Token、配置和运行状态。
+解除安裝腳本保留 `/etc/cfnat` 和 `/var/lib/cfnat`，防止誤刪 Token、設定和執行狀態。
