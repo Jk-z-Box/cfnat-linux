@@ -2,8 +2,6 @@
 
 面向 Linux 的 Cloudflare IP 優選、TCP 轉發、健康檢查與 DNS 自動同步服務。
 
-它參考了 `amclubs-cfnat` 的工作方式，但核心程式碼為獨立實作，不依賴原專案未公開的二進位原始碼。
-
 ## 功能
 
 - 從本機檔案或 HTTP(S) 位址讀取 IPv4/IPv6 CIDR 或裸 IP，並快取成功下載的遠端 IP 池。
