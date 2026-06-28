@@ -1,5 +1,5 @@
 {
-  "config_version": 5,
+  "config_version": 6,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -36,6 +36,8 @@
     "ttl": 1,
     "proxied": false,
     "token_env": "CF_API_TOKEN",
-    "marker": "managed-by:cfnat-linux"
+    "marker": "managed-by:cfnat-linux",
+    "latency_sync_enabled": false,
+    "latency_sync_interval": "5m"
   }
 }

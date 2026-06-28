@@ -157,6 +157,23 @@ prompt_dns_settings() {
     fi
     retry "API Token 不能为空且不能包含空白字符"
   done
+  while true; do
+    read -r -p "DNS 是否按延迟排序冷却同步？[y/N]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) DNS_LATENCY_SYNC_BOOL=true; break ;;
+      ""|n|N|no|NO|No) DNS_LATENCY_SYNC_BOOL=false; break ;;
+      *) retry "请输入 y 或 n" ;;
+    esac
+  done
+  while [[ "${DNS_LATENCY_SYNC_BOOL}" == true ]]; do
+    read -r -p "DNS 延迟排序同步冷却时间，单位分钟 [5]: " value
+    value="${value:-5}"
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 10080 )); then
+      DNS_LATENCY_SYNC_INTERVAL="${value}m"
+      break
+    fi
+    retry "冷却时间必须是 1-10080 的整数（分钟）"
+  done
 }
 
 [[ "${EUID}" -eq 0 ]] || die "请使用 root 运行：sudo ./scripts/install.sh"
@@ -213,7 +230,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   prompt_latency_monitor_interval
   if [[ "${IP_VERSION}" == "4" ]]; then SOURCE="https://www.cloudflare.com/ips-v4"; else SOURCE="https://www.cloudflare.com/ips-v6"; fi
   prompt_colos
-  DNS_BOOL=false; ZONE_ID=""; RECORD_NAME=""; SYNC_COUNT=1; TOKEN=""
+  DNS_BOOL=false; ZONE_ID=""; RECORD_NAME=""; SYNC_COUNT=1; TOKEN=""; DNS_LATENCY_SYNC_BOOL=false; DNS_LATENCY_SYNC_INTERVAL="5m"
   prompt_dns_enabled
   if [[ "${DNS_BOOL}" == true ]]; then
     prompt_dns_settings
@@ -221,7 +238,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 5,
+  "config_version": 6,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -256,7 +273,9 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "ttl": 1,
     "proxied": false,
     "token_env": "CF_API_TOKEN",
-    "marker": "managed-by:cfnat-linux"
+    "marker": "managed-by:cfnat-linux",
+    "latency_sync_enabled": ${DNS_LATENCY_SYNC_BOOL},
+    "latency_sync_interval": "${DNS_LATENCY_SYNC_INTERVAL}"
   }
 }
 EOF

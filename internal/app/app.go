@@ -265,7 +265,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	reordered := false
 	healthyCount := len(pool)
 	a.mu.Lock()
-	oldDNSIPs := a.desiredDNSIPsLocked()
+	oldSyncedIPs := append([]string(nil), a.state.DNS.SyncedIPs...)
 	newPool := make([]scanner.Result, 0, len(a.pool))
 	for _, result := range a.pool {
 		if _, drop := removed[result.IP]; drop {
@@ -307,7 +307,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 		a.state.Status = "degraded"
 	}
 	newDNSIPs := a.desiredDNSIPsLocked()
-	dnsNeedsSync = !sameStrings(oldDNSIPs, newDNSIPs)
+	dnsNeedsSync = a.shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, newDNSIPs, removed, time.Now())
 	pool = append([]scanner.Result(nil), newPool...)
 	healthyCount = len(newPool)
 	a.mu.Unlock()
@@ -363,6 +363,37 @@ func (a *App) desiredDNSIPsLocked() []string {
 		}
 	}
 	return ips
+}
+
+func (a *App) shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, newDesiredIPs []string, removed map[netip.Addr]struct{}, now time.Time) bool {
+	if !a.cfg.DNS.Enabled {
+		return false
+	}
+	if len(newDesiredIPs) == 0 {
+		return false
+	}
+	if len(oldSyncedIPs) == 0 || !a.state.DNS.Synced {
+		return true
+	}
+	for _, ip := range oldSyncedIPs {
+		parsed, err := netip.ParseAddr(ip)
+		if err != nil {
+			return true
+		}
+		if _, drop := removed[parsed]; drop {
+			return true
+		}
+	}
+	if sameStrings(oldSyncedIPs, newDesiredIPs) {
+		return false
+	}
+	if !a.cfg.DNS.LatencySyncEnabled {
+		return false
+	}
+	if a.state.DNS.LastSyncedAt == nil {
+		return true
+	}
+	return now.Sub(*a.state.DNS.LastSyncedAt) >= a.cfg.DNS.LatencySyncInterval.Value()
 }
 
 func sameStrings(a, b []string) bool {
@@ -522,8 +553,18 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 		fmt.Fprintln(w, "DNS 解析        : 未启用")
 	} else if state.DNS.Synced {
 		fmt.Fprintf(w, "DNS 解析        : 已同步 → %s (%s)\n", cfg.DNS.RecordName, valueOr(join(state.DNS.SyncedIPs), "无 IP"))
+		if cfg.DNS.LatencySyncEnabled {
+			fmt.Fprintf(w, "DNS 延迟同步    : 已启用，冷却时间 %s\n", cfg.DNS.LatencySyncInterval.Value())
+		} else {
+			fmt.Fprintln(w, "DNS 延迟同步    : 未启用")
+		}
 	} else {
 		fmt.Fprintf(w, "DNS 解析        : 未同步 → %s\n", cfg.DNS.RecordName)
+		if cfg.DNS.LatencySyncEnabled {
+			fmt.Fprintf(w, "DNS 延迟同步    : 已启用，冷却时间 %s\n", cfg.DNS.LatencySyncInterval.Value())
+		} else {
+			fmt.Fprintln(w, "DNS 延迟同步    : 未启用")
+		}
 		if state.DNS.LastError != "" {
 			fmt.Fprintf(w, "DNS 错误        : %s\n", state.DNS.LastError)
 		}

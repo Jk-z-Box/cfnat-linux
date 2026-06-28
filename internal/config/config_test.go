@@ -88,6 +88,14 @@ func TestRejectMinHealthyCountLargerThanPool(t *testing.T) {
 	}
 }
 
+func TestRejectInvalidDNSLatencySyncInterval(t *testing.T) {
+	cfg := Defaults()
+	cfg.DNS.LatencySyncInterval = Duration(0)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected latency sync interval validation error")
+	}
+}
+
 func TestAcceptIPv6ListenAddress(t *testing.T) {
 	cfg := Defaults()
 	cfg.Listen = "[::]:1234"

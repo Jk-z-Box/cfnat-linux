@@ -40,3 +40,33 @@ func TestPrintStatusIncludesOperationalDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestDNSLatencySyncPolicy(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DNS.Enabled = true
+	cfg.DNS.RecordType = "A"
+	cfg.DNS.SyncCount = 1
+	cfg.DNS.LatencySyncEnabled = false
+	app := New(cfg, nil, nil)
+	now := time.Now().UTC()
+	app.state.DNS.Synced = true
+	app.state.DNS.LastSyncedAt = &now
+	app.state.DNS.SyncedIPs = []string{"192.0.2.1"}
+	desired := []string{"192.0.2.2"}
+	if app.shouldSyncDNSAfterPoolChangeLocked(app.state.DNS.SyncedIPs, desired, map[netip.Addr]struct{}{}, now.Add(time.Hour)) {
+		t.Fatal("latency-only DNS sync should be disabled by default")
+	}
+	cfg.DNS.LatencySyncEnabled = true
+	cfg.DNS.LatencySyncInterval = config.Duration(5 * time.Minute)
+	app.cfg = cfg
+	if app.shouldSyncDNSAfterPoolChangeLocked(app.state.DNS.SyncedIPs, desired, map[netip.Addr]struct{}{}, now.Add(time.Minute)) {
+		t.Fatal("latency-only DNS sync should respect cooldown")
+	}
+	if !app.shouldSyncDNSAfterPoolChangeLocked(app.state.DNS.SyncedIPs, desired, map[netip.Addr]struct{}{}, now.Add(6*time.Minute)) {
+		t.Fatal("latency-only DNS sync should run after cooldown")
+	}
+	removed := map[netip.Addr]struct{}{netip.MustParseAddr("192.0.2.1"): {}}
+	if !app.shouldSyncDNSAfterPoolChangeLocked(app.state.DNS.SyncedIPs, desired, removed, now.Add(time.Minute)) {
+		t.Fatal("removed synced IP should sync immediately")
+	}
+}

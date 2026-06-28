@@ -14,6 +14,7 @@
 - 當健康 IP 少於自訂門檻時，背景觸發整池重選；重選成功後熱替換目標池。
 - 將前 N 個優選 IP 同步為 Cloudflare `A` 或 `AAAA` 記錄。
 - 若已同步到 Cloudflare 的 IP 被判定不健康並剔除，會自動把健康 IP 池重新同步到 DNS。
+- DNS 不會預設跟隨 2 秒延遲排序同步；可選擇開啟「延遲排序冷卻同步」，按自訂冷卻時間低頻更新。
 - DNS 採用「先建立新記錄、再刪除舊記錄」，掃描失敗時絕不清空解析。
 - systemd 開機啟動、自動重啟、journald 日誌與低權限執行。
 - 首次掃描無結果時保持背景執行並定期重試，不再進入 systemd 重啟循環。
@@ -34,7 +35,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → TLS/HTTP 複篩 → 延遲排
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.5.0.tar.gz
+tar -xzf cfnat-linux-v0.6.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -49,6 +50,7 @@ sudo ./scripts/install.sh
 - 可選 Cloudflare 資料中心；
 - 是否同步 DNS；
 - Zone ID、完整記錄名稱和 API Token。
+- 是否讓 DNS 按延遲排序冷卻同步，以及冷卻時間。
 
 精靈會逐項檢查輸入格式。位址、連接埠、IP 版本、資料中心代碼或 DNS 參數有誤時，會說明原因並重新詢問目前項目，不會退出整個安裝流程。
 
@@ -68,6 +70,7 @@ sudo cfnatctl
 - 目前最優 IP；
 - 優選池每個 IP 的延遲、colo 和健康狀態；
 - Cloudflare DNS 是否啟用、是否同步成功、解析網域和同步 IP。
+- DNS 延遲排序同步是否啟用，以及冷卻時間。
 
 面板下方提供執行開關、立即重掃、診斷掃描、修改設定、即時日誌以及一鍵關閉並解除安裝。執行狀態同時儲存於 `/var/lib/cfnat/state.json`。
 
@@ -105,6 +108,13 @@ Token 儲存於 `/etc/cfnat/cfnat.env`，權限為 `0640`，不會寫入 JSON、
 
 DNS 同步只刪除 `comment` 等於 `managed-by:cfnat-linux` 的舊記錄，不刪除同網域名稱下由使用者建立的記錄。為避免短暫空解析，它總是先建立新記錄，再刪除舊記錄。
 
+DNS 同步分為兩類：
+
+- 故障修復型同步：已同步 IP 被剔除、整池重選成功、首次掃描成功時會立即同步，不受冷卻時間限制。
+- 延遲排序型同步：只有 `cloudflare_dns.latency_sync_enabled=true` 時才啟用，並且至少間隔 `cloudflare_dns.latency_sync_interval` 後才會把 DNS 更新為目前延遲排序靠前的健康 IP。
+
+如果 `cloudflare_dns.latency_sync_enabled=false`，本地 TCP 仍會每 2 秒按延遲排序，但 DNS 不會因單純延遲排名變化而同步。
+
 ## 設定檔
 
 主設定位於 `/etc/cfnat/config.json`，完整範例見 `configs/config.example.json`。
@@ -133,6 +143,8 @@ DNS 同步只刪除 `comment` 等於 `managed-by:cfnat-linux` 的舊記錄，不
 | `source_cache_dir` | `/var/lib/cfnat/ip-cache` | 遠端 IP 池成功下載後的本機快取目錄 |
 | `cloudflare_dns.sync_count` | `1` | 同步排名前幾個 IP |
 | `cloudflare_dns.ttl` | `1` | Cloudflare API 中 `1` 表示自動 TTL |
+| `cloudflare_dns.latency_sync_enabled` | `false` | 是否允許 DNS 按延遲排序冷卻同步 |
+| `cloudflare_dns.latency_sync_interval` | `5m` | 延遲排序型 DNS 同步的最小間隔 |
 
 ### 使用自訂 IP 池
 
@@ -172,7 +184,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.5.0
+make release VERSION=v0.6.0
 ```
 
 ## 命令列

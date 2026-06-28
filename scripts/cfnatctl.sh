@@ -142,6 +142,29 @@ toggle_dns() {
   done
 }
 
+toggle_dns_latency_sync() {
+  local value
+  while true; do
+    read -r -p "启用 DNS 延迟排序冷却同步？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config dns_latency_sync_enabled true && return ;;
+      n|N|no|NO|No) set_config dns_latency_sync_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+edit_dns_latency_sync_interval() {
+  local value
+  while true; do
+    read -r -p "DNS 延迟排序同步冷却时间，单位分钟（例如 5）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 10080 )); then
+      if set_config dns_latency_sync_interval "${value}m"; then return; fi
+    fi
+    echo "请输入 1-10080 的整数。" >&2
+  done
+}
+
 config_menu() {
   require_root || return
   while true; do
@@ -155,7 +178,9 @@ config_menu() {
     echo "  6) DNS 同步开关"
     echo "  7) 最小健康 IP 数"
     echo "  8) 延迟监控间隔"
-    echo "  9) 使用编辑器修改完整配置"
+    echo "  9) DNS 延迟排序同步开关"
+    echo " 10) DNS 延迟排序同步冷却时间"
+    echo " 11) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -167,7 +192,9 @@ config_menu() {
       6) toggle_dns; pause_screen ;;
       7) edit_min_healthy_count; pause_screen ;;
       8) edit_latency_monitor_interval; pause_screen ;;
-      9)
+      9) toggle_dns_latency_sync; pause_screen ;;
+      10) edit_dns_latency_sync_interval; pause_screen ;;
+      11)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"

@@ -35,15 +35,17 @@ func (d Duration) MarshalJSON() ([]byte, error) {
 }
 
 type DNSConfig struct {
-	Enabled    bool   `json:"enabled"`
-	ZoneID     string `json:"zone_id"`
-	RecordName string `json:"record_name"`
-	RecordType string `json:"record_type"`
-	SyncCount  int    `json:"sync_count"`
-	TTL        int    `json:"ttl"`
-	Proxied    bool   `json:"proxied"`
-	TokenEnv   string `json:"token_env"`
-	Marker     string `json:"marker"`
+	Enabled             bool     `json:"enabled"`
+	ZoneID              string   `json:"zone_id"`
+	RecordName          string   `json:"record_name"`
+	RecordType          string   `json:"record_type"`
+	SyncCount           int      `json:"sync_count"`
+	TTL                 int      `json:"ttl"`
+	Proxied             bool     `json:"proxied"`
+	TokenEnv            string   `json:"token_env"`
+	Marker              string   `json:"marker"`
+	LatencySyncEnabled  bool     `json:"latency_sync_enabled"`
+	LatencySyncInterval Duration `json:"latency_sync_interval"`
 }
 
 type Config struct {
@@ -78,7 +80,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          5,
+		ConfigVersion:          6,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -103,7 +105,7 @@ func Defaults() Config {
 		LogLevel:               "info",
 		DNS: DNSConfig{
 			RecordType: "auto", SyncCount: 1, TTL: 1, TokenEnv: "CF_API_TOKEN",
-			Marker: "managed-by:cfnat-linux",
+			Marker: "managed-by:cfnat-linux", LatencySyncEnabled: false, LatencySyncInterval: Duration(5 * time.Minute),
 		},
 	}
 }
@@ -152,8 +154,18 @@ func Migrate(path string) (bool, error) {
 		raw["latency_monitor_interval"] = "2s"
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 5 {
-		raw["config_version"] = 5
+	if dns, ok := raw["cloudflare_dns"].(map[string]any); ok {
+		if _, ok := dns["latency_sync_enabled"]; !ok {
+			dns["latency_sync_enabled"] = false
+			changed = true
+		}
+		if _, ok := dns["latency_sync_interval"]; !ok {
+			dns["latency_sync_interval"] = "5m"
+			changed = true
+		}
+	}
+	if version, _ := raw["config_version"].(float64); int(version) < 6 {
+		raw["config_version"] = 6
 		changed = true
 	}
 	if !changed {
@@ -206,6 +218,18 @@ func Set(path, key, value string) error {
 			return errors.New("dns_enabled 只能是 true 或 false")
 		}
 		cfg.DNS.Enabled = parsed
+	case "dns_latency_sync_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("dns_latency_sync_enabled 只能是 true 或 false")
+		}
+		cfg.DNS.LatencySyncEnabled = parsed
+	case "dns_latency_sync_interval":
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.New("dns_latency_sync_interval 格式无效，请使用 5m、1h 等格式")
+		}
+		cfg.DNS.LatencySyncInterval = Duration(parsed)
 	default:
 		return fmt.Errorf("不允许修改的配置项: %s", key)
 	}
@@ -257,6 +281,9 @@ func (c *Config) Validate() error {
 	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 || c.ScanInterval.Value() <= 0 || c.HealthInterval.Value() <= 0 || c.LatencyMonitorInterval.Value() <= 0 {
 		return errors.New("超时时间必须大于 0")
 	}
+	if c.DNS.LatencySyncInterval.Value() <= 0 {
+		return errors.New("cloudflare_dns.latency_sync_interval 必须大于 0")
+	}
 	u, err := url.Parse(c.CheckURL)
 	if err != nil || u.Hostname() == "" {
 		return fmt.Errorf("check_url 无效: %q", c.CheckURL)
@@ -288,6 +315,9 @@ func (c *Config) Validate() error {
 		}
 		if strings.TrimSpace(c.DNS.Marker) == "" {
 			return errors.New("cloudflare_dns.marker 不能为空，以免误删非托管记录")
+		}
+		if c.DNS.LatencySyncEnabled && c.DNS.LatencySyncInterval.Value() <= 0 {
+			return errors.New("cloudflare_dns.latency_sync_interval 必须大于 0")
 		}
 		want := map[int]string{4: "A", 6: "AAAA"}[c.IPVersion]
 		if c.DNS.RecordType == "auto" {
