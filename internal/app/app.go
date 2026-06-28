@@ -31,6 +31,7 @@ type ScanState struct {
 type TargetState struct {
 	IP        netip.Addr `json:"ip"`
 	LatencyMS int64      `json:"latency_ms"`
+	SpeedMBps float64    `json:"speed_mbps,omitempty"`
 	Colo      string     `json:"colo,omitempty"`
 	Status    string     `json:"status"`
 	CheckedAt time.Time  `json:"checked_at"`
@@ -184,7 +185,7 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	completed := time.Now().UTC()
 	targets := make([]TargetState, 0, len(pool))
 	for _, result := range pool {
-		targets = append(targets, TargetState{IP: result.IP, LatencyMS: result.LatencyMS, Colo: result.Colo, Status: "healthy", CheckedAt: result.CheckedAt})
+		targets = append(targets, TargetState{IP: result.IP, LatencyMS: result.LatencyMS, SpeedMBps: result.SpeedMBps, Colo: result.Colo, Status: "healthy", CheckedAt: result.CheckedAt})
 	}
 	a.mu.Lock()
 	a.pool = pool
@@ -332,13 +333,14 @@ func mergeTargetStates(results []scanner.Result, existing []TargetState) []Targe
 	}
 	targets := make([]TargetState, 0, len(results))
 	for _, result := range results {
-		target := TargetState{IP: result.IP, LatencyMS: result.LatencyMS, Colo: result.Colo, Status: "healthy", CheckedAt: result.CheckedAt}
+		target := TargetState{IP: result.IP, LatencyMS: result.LatencyMS, SpeedMBps: result.SpeedMBps, Colo: result.Colo, Status: "healthy", CheckedAt: result.CheckedAt}
 		if old, ok := byIP[result.IP]; ok {
 			target.Status = old.Status
 			target.LastError = old.LastError
 			target.CheckedAt = old.CheckedAt
 			if old.Status == "healthy" {
 				target.LatencyMS = result.LatencyMS
+				target.SpeedMBps = result.SpeedMBps
 				target.Colo = result.Colo
 				target.CheckedAt = result.CheckedAt
 			}
@@ -517,6 +519,11 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 	fmt.Fprintf(w, "监听地址        : %s\n", cfg.Listen)
 	fmt.Fprintf(w, "延迟上限        : %s（超过该值不优选）\n", cfg.MaxLatency.Value())
 	fmt.Fprintf(w, "延迟监控        : 每 %s 重新排序转发池\n", cfg.LatencyMonitorInterval.Value())
+	if cfg.SpeedTest.Enabled {
+		fmt.Fprintf(w, "测速筛选        : ≥ %.2f MB/s，最多测试 %d 个候选\n", cfg.SpeedTest.MinMBps, cfg.SpeedTest.MaxCandidates)
+	} else {
+		fmt.Fprintln(w, "测速筛选        : 未启用")
+	}
 	fmt.Fprintf(w, "重选阈值        : 健康 IP 少于 %d 个时整池重选\n", cfg.MinHealthyCount)
 	state, err := ReadState(cfg.StateFile)
 	if err != nil {
@@ -546,7 +553,7 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 	} else {
 		fmt.Fprintln(w, "优选 IP 状态    :")
 		for i, target := range state.Targets {
-			fmt.Fprintf(w, "  %2d. %-39s %4dms %-8s %s\n", i+1, target.IP, target.LatencyMS, valueOr(target.Colo, "-"), statusText(target.Status))
+			fmt.Fprintf(w, "  %2d. %-39s %4dms %8s %-8s %s\n", i+1, target.IP, target.LatencyMS, speedText(target.SpeedMBps), valueOr(target.Colo, "-"), statusText(target.Status))
 		}
 	}
 	if !cfg.DNS.Enabled {
@@ -581,6 +588,13 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func speedText(value float64) string {
+	if value <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.2fMB/s", value)
 }
 
 func join(values []string) string {

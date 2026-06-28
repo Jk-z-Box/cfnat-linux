@@ -96,6 +96,29 @@ edit_latency_monitor_interval() {
   done
 }
 
+edit_speed_test_min() {
+  local value
+  while true; do
+    read -r -p "最低下载速度，单位 MB/s（例如 5）: " value
+    if [[ "${value}" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !(${value} > 0 && ${value} <= 100000)}"; then
+      if set_config speed_test_min_mbps "${value}"; then return; fi
+    fi
+    echo "请输入大于 0 的数字。" >&2
+  done
+}
+
+toggle_speed_test() {
+  local value
+  while true; do
+    read -r -p "启用下载测速筛选？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config speed_test_enabled true && return ;;
+      n|N|no|NO|No) set_config speed_test_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
 edit_zone_id() {
   local value
   while true; do
@@ -180,7 +203,9 @@ config_menu() {
     echo "  8) 延迟监控间隔"
     echo "  9) DNS 延迟排序同步开关"
     echo " 10) DNS 延迟排序同步冷却时间"
-    echo " 11) 使用编辑器修改完整配置"
+    echo " 11) 下载测速筛选开关"
+    echo " 12) 下载测速最低速度"
+    echo " 13) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -194,7 +219,9 @@ config_menu() {
       8) edit_latency_monitor_interval; pause_screen ;;
       9) toggle_dns_latency_sync; pause_screen ;;
       10) edit_dns_latency_sync_interval; pause_screen ;;
-      11)
+      11) toggle_speed_test; pause_screen ;;
+      12) edit_speed_test_min; pause_screen ;;
+      13)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"

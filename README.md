@@ -7,6 +7,7 @@
 - 從本機檔案或 HTTP(S) 位址讀取 IPv4/IPv6 CIDR 或裸 IP，並快取成功下載的遠端 IP 池。
 - 隨機抽樣或依順序展開候選 IP。
 - 兩階段掃描：先進行輕量 TCP 初篩，再對最快候選執行 TLS、HTTP 狀態碼與延遲檢查，避免大併發完整請求觸發限速。
+- 可選下載測速篩選：TCP 初篩後對低延遲候選 IP 進行下載測速，低於指定 MB/s 或無速度的 IP 直接剔除。
 - 可透過 `/cdn-cgi/trace` 依 Cloudflare `colo` 篩選資料中心。
 - 維護低延遲目標池，依最新延遲排序；新連線始終優先連線目前延遲最低的 IP，失敗時再依序 fallback。
 - 預設每 2 秒監控一次池內 IP 延遲，可自訂監控間隔並熱更新轉發順序。
@@ -23,7 +24,7 @@
 ## 工作流程
 
 ```text
-IP/CIDR 來源 → 候選生成 → TCP 初篩 → TLS/HTTP 複篩 → 延遲排序 → 目標池 → 最低延遲優先 TCP 轉發
+IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HTTP 複篩 → 延遲排序 → 目標池 → 最低延遲優先 TCP 轉發
                                   ↓
                          Cloudflare DNS 同步
                                   ↓
@@ -35,7 +36,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → TLS/HTTP 複篩 → 延遲排
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.6.0.tar.gz
+tar -xzf cfnat-linux-v0.7.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -47,6 +48,7 @@ sudo ./scripts/install.sh
 - 最大允許延遲（毫秒）；
 - 健康 IP 少於幾個時觸發整池重選；
 - 延遲監控間隔（秒）；
+- 是否啟用下載測速篩選、最低下載速度、單 IP 測速時間和最多測速候選數；
 - 可選 Cloudflare 資料中心；
 - 是否同步 DNS；
 - Zone ID、完整記錄名稱和 API Token。
@@ -65,6 +67,7 @@ sudo cfnatctl
 - systemd 服務是否執行；
 - 監聽 IP、連接埠和最大允許延遲；
 - 延遲監控間隔；
+- 下載測速篩選狀態與速度門檻；
 - 健康 IP 低於幾個時會整池重選；
 - 掃描正在進行、已經完成或失敗；
 - 目前最優 IP；
@@ -75,6 +78,8 @@ sudo cfnatctl
 面板下方提供執行開關、立即重掃、診斷掃描、修改設定、即時日誌以及一鍵關閉並解除安裝。執行狀態同時儲存於 `/var/lib/cfnat/state.json`。
 
 掃描日誌會彙總失敗原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。這樣可以直接判斷是線路不可達、TLS/SNI、探測網址、延遲閾值還是機房篩選導致無結果。
+
+若啟用下載測速篩選，TCP 初篩完成後會優先取低延遲候選 IP 做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：先按 TCP 延遲篩出候選，再逐個下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續 TLS/HTTP 複篩。
 
 也可以直接使用命令：
 
@@ -141,6 +146,11 @@ DNS 同步分為兩類：
 | `health_interval` | `60s` | 無可用 IP 時的背景重試週期 |
 | `health_failures` | `3` | 單個 IP 連續失敗多少次後判定不健康並剔除 |
 | `source_cache_dir` | `/var/lib/cfnat/ip-cache` | 遠端 IP 池成功下載後的本機快取目錄 |
+| `speed_test.enabled` | `false` | 是否啟用下載測速篩選 |
+| `speed_test.url` | `https://speed.cloudflare.com/__down?bytes=200000000` | 下載測速 URL |
+| `speed_test.min_mbps` | `5` | 最低下載速度，單位 MB/s |
+| `speed_test.timeout` | `10s` | 單個 IP 下載測速時間 |
+| `speed_test.max_candidates` | `50` | TCP 初篩後最多測速的候選 IP 數 |
 | `cloudflare_dns.sync_count` | `1` | 同步排名前幾個 IP |
 | `cloudflare_dns.ttl` | `1` | Cloudflare API 中 `1` 表示自動 TTL |
 | `cloudflare_dns.latency_sync_enabled` | `false` | 是否允許 DNS 按延遲排序冷卻同步 |
@@ -184,7 +194,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.6.0
+make release VERSION=v0.7.0
 ```
 
 ## 命令列

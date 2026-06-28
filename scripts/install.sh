@@ -82,6 +82,45 @@ prompt_latency_monitor_interval() {
   done
 }
 
+prompt_speed_test_settings() {
+  local value
+  while true; do
+    read -r -p "启用下载测速筛选？[y/N]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) SPEED_TEST_BOOL=true; break ;;
+      ""|n|N|no|NO|No) SPEED_TEST_BOOL=false; break ;;
+      *) retry "请输入 y 或 n" ;;
+    esac
+  done
+  while [[ "${SPEED_TEST_BOOL}" == true ]]; do
+    read -r -p "最低下载速度，单位 MB/s [5]: " value
+    value="${value:-5}"
+    if [[ "${value}" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !(${value} > 0 && ${value} <= 100000)}"; then
+      SPEED_TEST_MIN_MBPS="${value}"
+      break
+    fi
+    retry "最低下载速度必须是大于 0 的数字"
+  done
+  while [[ "${SPEED_TEST_BOOL}" == true ]]; do
+    read -r -p "单个 IP 测速时间，单位秒 [10]: " value
+    value="${value:-10}"
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 120 )); then
+      SPEED_TEST_TIMEOUT="${value}s"
+      break
+    fi
+    retry "测速时间必须是 1-120 的整数（秒）"
+  done
+  while [[ "${SPEED_TEST_BOOL}" == true ]]; do
+    read -r -p "TCP 初筛后最多测速多少个候选 IP [50]: " value
+    value="${value:-50}"
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 1000 )); then
+      SPEED_TEST_MAX_CANDIDATES="${value}"
+      break
+    fi
+    retry "最多测速候选数必须是 1-1000 的整数"
+  done
+}
+
 prompt_colos() {
   local value item invalid
   local -a items
@@ -228,6 +267,8 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   prompt_max_latency
   prompt_min_healthy_count
   prompt_latency_monitor_interval
+  SPEED_TEST_BOOL=false; SPEED_TEST_MIN_MBPS=5; SPEED_TEST_TIMEOUT="10s"; SPEED_TEST_MAX_CANDIDATES=50
+  prompt_speed_test_settings
   if [[ "${IP_VERSION}" == "4" ]]; then SOURCE="https://www.cloudflare.com/ips-v4"; else SOURCE="https://www.cloudflare.com/ips-v6"; fi
   prompt_colos
   DNS_BOOL=false; ZONE_ID=""; RECORD_NAME=""; SYNC_COUNT=1; TOKEN=""; DNS_LATENCY_SYNC_BOOL=false; DNS_LATENCY_SYNC_INTERVAL="5m"
@@ -238,7 +279,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 6,
+  "config_version": 7,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -264,6 +305,13 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "state_file": "/var/lib/cfnat/state.json",
   "source_cache_dir": "/var/lib/cfnat/ip-cache",
   "log_level": "info",
+  "speed_test": {
+    "enabled": ${SPEED_TEST_BOOL},
+    "url": "https://speed.cloudflare.com/__down?bytes=200000000",
+    "min_mbps": ${SPEED_TEST_MIN_MBPS},
+    "timeout": "${SPEED_TEST_TIMEOUT}",
+    "max_candidates": ${SPEED_TEST_MAX_CANDIDATES}
+  },
   "cloudflare_dns": {
     "enabled": ${DNS_BOOL},
     "zone_id": "${ZONE_ID}",

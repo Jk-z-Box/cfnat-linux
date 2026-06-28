@@ -98,3 +98,32 @@ func TestProbeRejectsIPAboveLatencyLimit(t *testing.T) {
 		t.Fatalf("expected latency rejection, got %v", err)
 	}
 }
+
+func TestDownloadSpeed(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	payload := make([]byte, 512*1024)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	})}
+	defer server.Close()
+	go server.Serve(listener)
+
+	cfg := config.Defaults()
+	cfg.SpeedTest.Enabled = true
+	cfg.SpeedTest.URL = "http://" + listener.Addr().String() + "/download"
+	cfg.SpeedTest.MinMBps = 0.01
+	cfg.SpeedTest.Timeout = config.Duration(2 * time.Second)
+	cfg.SpeedTest.MaxCandidates = 1
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	speed, err := s.downloadSpeed(context.Background(), netip.MustParseAddr("127.0.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if speed <= 0 {
+		t.Fatalf("speed = %f", speed)
+	}
+}

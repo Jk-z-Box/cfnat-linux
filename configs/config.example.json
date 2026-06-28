@@ -1,5 +1,5 @@
 {
-  "config_version": 6,
+  "config_version": 7,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -27,6 +27,13 @@
   "state_file": "/var/lib/cfnat/state.json",
   "source_cache_dir": "/var/lib/cfnat/ip-cache",
   "log_level": "info",
+  "speed_test": {
+    "enabled": false,
+    "url": "https://speed.cloudflare.com/__down?bytes=200000000",
+    "min_mbps": 5,
+    "timeout": "10s",
+    "max_candidates": 50
+  },
   "cloudflare_dns": {
     "enabled": false,
     "zone_id": "",

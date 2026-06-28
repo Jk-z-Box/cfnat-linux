@@ -48,39 +48,48 @@ type DNSConfig struct {
 	LatencySyncInterval Duration `json:"latency_sync_interval"`
 }
 
+type SpeedTestConfig struct {
+	Enabled       bool     `json:"enabled"`
+	URL           string   `json:"url"`
+	MinMBps       float64  `json:"min_mbps"`
+	Timeout       Duration `json:"timeout"`
+	MaxCandidates int      `json:"max_candidates"`
+}
+
 type Config struct {
-	ConfigVersion          int       `json:"config_version"`
-	Listen                 string    `json:"listen"`
-	IPVersion              int       `json:"ip_version"`
-	IPSources              []string  `json:"ip_sources"`
-	RandomIPs              bool      `json:"random_ips"`
-	MaxCandidates          int       `json:"max_candidates"`
-	ValidIPCount           int       `json:"valid_ip_count"`
-	PoolSize               int       `json:"pool_size"`
-	MinHealthyCount        int       `json:"min_healthy_count"`
-	Concurrency            int       `json:"concurrency"`
-	TargetPort             int       `json:"target_port"`
-	TLS                    bool      `json:"tls"`
-	TLSServerName          string    `json:"tls_server_name"`
-	InsecureSkipVerify     bool      `json:"insecure_skip_verify"`
-	CheckURL               string    `json:"check_url"`
-	ExpectedStatus         int       `json:"expected_status"`
-	MaxLatency             Duration  `json:"max_latency"`
-	DialTimeout            Duration  `json:"dial_timeout"`
-	Colos                  []string  `json:"colos"`
-	ScanInterval           Duration  `json:"scan_interval"`
-	LatencyMonitorInterval Duration  `json:"latency_monitor_interval"`
-	HealthInterval         Duration  `json:"health_interval"`
-	HealthFailures         int       `json:"health_failures"`
-	StateFile              string    `json:"state_file"`
-	SourceCacheDir         string    `json:"source_cache_dir"`
-	LogLevel               string    `json:"log_level"`
-	DNS                    DNSConfig `json:"cloudflare_dns"`
+	ConfigVersion          int             `json:"config_version"`
+	Listen                 string          `json:"listen"`
+	IPVersion              int             `json:"ip_version"`
+	IPSources              []string        `json:"ip_sources"`
+	RandomIPs              bool            `json:"random_ips"`
+	MaxCandidates          int             `json:"max_candidates"`
+	ValidIPCount           int             `json:"valid_ip_count"`
+	PoolSize               int             `json:"pool_size"`
+	MinHealthyCount        int             `json:"min_healthy_count"`
+	Concurrency            int             `json:"concurrency"`
+	TargetPort             int             `json:"target_port"`
+	TLS                    bool            `json:"tls"`
+	TLSServerName          string          `json:"tls_server_name"`
+	InsecureSkipVerify     bool            `json:"insecure_skip_verify"`
+	CheckURL               string          `json:"check_url"`
+	ExpectedStatus         int             `json:"expected_status"`
+	MaxLatency             Duration        `json:"max_latency"`
+	DialTimeout            Duration        `json:"dial_timeout"`
+	Colos                  []string        `json:"colos"`
+	ScanInterval           Duration        `json:"scan_interval"`
+	LatencyMonitorInterval Duration        `json:"latency_monitor_interval"`
+	HealthInterval         Duration        `json:"health_interval"`
+	HealthFailures         int             `json:"health_failures"`
+	StateFile              string          `json:"state_file"`
+	SourceCacheDir         string          `json:"source_cache_dir"`
+	LogLevel               string          `json:"log_level"`
+	DNS                    DNSConfig       `json:"cloudflare_dns"`
+	SpeedTest              SpeedTestConfig `json:"speed_test"`
 }
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          6,
+		ConfigVersion:          7,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -106,6 +115,10 @@ func Defaults() Config {
 		DNS: DNSConfig{
 			RecordType: "auto", SyncCount: 1, TTL: 1, TokenEnv: "CF_API_TOKEN",
 			Marker: "managed-by:cfnat-linux", LatencySyncEnabled: false, LatencySyncInterval: Duration(5 * time.Minute),
+		},
+		SpeedTest: SpeedTestConfig{
+			Enabled: false, URL: "https://speed.cloudflare.com/__down?bytes=200000000",
+			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50,
 		},
 	}
 }
@@ -164,8 +177,15 @@ func Migrate(path string) (bool, error) {
 			changed = true
 		}
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 6 {
-		raw["config_version"] = 6
+	if _, ok := raw["speed_test"]; !ok {
+		raw["speed_test"] = map[string]any{
+			"enabled": false, "url": "https://speed.cloudflare.com/__down?bytes=200000000",
+			"min_mbps": 5, "timeout": "10s", "max_candidates": 50,
+		}
+		changed = true
+	}
+	if version, _ := raw["config_version"].(float64); int(version) < 7 {
+		raw["config_version"] = 7
 		changed = true
 	}
 	if !changed {
@@ -230,6 +250,18 @@ func Set(path, key, value string) error {
 			return errors.New("dns_latency_sync_interval 格式无效，请使用 5m、1h 等格式")
 		}
 		cfg.DNS.LatencySyncInterval = Duration(parsed)
+	case "speed_test_min_mbps":
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return errors.New("speed_test_min_mbps 必须是数字")
+		}
+		cfg.SpeedTest.MinMBps = parsed
+	case "speed_test_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("speed_test_enabled 只能是 true 或 false")
+		}
+		cfg.SpeedTest.Enabled = parsed
 	default:
 		return fmt.Errorf("不允许修改的配置项: %s", key)
 	}
@@ -280,6 +312,21 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 || c.ScanInterval.Value() <= 0 || c.HealthInterval.Value() <= 0 || c.LatencyMonitorInterval.Value() <= 0 {
 		return errors.New("超时时间必须大于 0")
+	}
+	if c.SpeedTest.Enabled {
+		if c.SpeedTest.MinMBps <= 0 {
+			return errors.New("启用测速筛选时 speed_test.min_mbps 必须大于 0")
+		}
+		if c.SpeedTest.Timeout.Value() <= 0 {
+			return errors.New("speed_test.timeout 必须大于 0")
+		}
+		if c.SpeedTest.MaxCandidates < 1 {
+			return errors.New("speed_test.max_candidates 必须大于 0")
+		}
+		u, err := url.Parse(c.SpeedTest.URL)
+		if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") {
+			return fmt.Errorf("speed_test.url 无效: %q", c.SpeedTest.URL)
+		}
 	}
 	if c.DNS.LatencySyncInterval.Value() <= 0 {
 		return errors.New("cloudflare_dns.latency_sync_interval 必须大于 0")

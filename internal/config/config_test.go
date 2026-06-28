@@ -96,6 +96,15 @@ func TestRejectInvalidDNSLatencySyncInterval(t *testing.T) {
 	}
 }
 
+func TestRejectInvalidSpeedTestThreshold(t *testing.T) {
+	cfg := Defaults()
+	cfg.SpeedTest.Enabled = true
+	cfg.SpeedTest.MinMBps = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected speed threshold validation error")
+	}
+}
+
 func TestAcceptIPv6ListenAddress(t *testing.T) {
 	cfg := Defaults()
 	cfg.Listen = "[::]:1234"

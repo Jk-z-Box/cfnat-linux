@@ -27,6 +27,7 @@ import (
 type Result struct {
 	IP        netip.Addr `json:"ip"`
 	LatencyMS int64      `json:"latency_ms"`
+	SpeedMBps float64    `json:"speed_mbps,omitempty"`
 	Colo      string     `json:"colo,omitempty"`
 	CheckedAt time.Time  `json:"checked_at"`
 }
@@ -76,6 +77,15 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 	candidates = make([]netip.Addr, shortlistSize)
 	for i := range candidates {
 		candidates[i] = ranked[i].IP
+	}
+	speeds := map[netip.Addr]float64{}
+	if s.cfg.SpeedTest.Enabled {
+		var speedFailures map[string]int
+		candidates, speeds, speedFailures = s.filterByDownloadSpeed(ctx, candidates)
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("没有找到满足测速条件的 IP（失败统计: %s）", formatCounts(speedFailures))
+		}
+		s.logger.Info("下载测速筛选完成", "passed", len(candidates), "min_mbps", s.cfg.SpeedTest.MinMBps, "failures", speedFailures)
 	}
 	httpConcurrency := min(s.cfg.Concurrency, 20)
 	s.logger.Info("TCP 初筛完成", "reachable", len(ranked), "shortlist", len(candidates), "http_concurrency", httpConcurrency, "failures", tcpFailures)
@@ -128,6 +138,9 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 				results = nil
 				continue
 			}
+			if speed, ok := speeds[result.IP]; ok {
+				result.SpeedMBps = speed
+			}
 			valid = append(valid, result)
 			if len(valid) >= s.cfg.ValidIPCount {
 				cancel()
@@ -153,8 +166,105 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 		s.logger.Warn("扫描失败统计", "failures", counts)
 		return nil, fmt.Errorf("没有找到符合条件的 IP（失败统计: %s）", formatCounts(counts))
 	}
-	s.logger.Info("扫描完成", "valid", len(valid), "best_ip", valid[0].IP.String(), "best_latency_ms", valid[0].LatencyMS, "failures", counts)
+	s.logger.Info("扫描完成", "valid", len(valid), "best_ip", valid[0].IP.String(), "best_latency_ms", valid[0].LatencyMS, "best_speed_mbps", valid[0].SpeedMBps, "failures", counts)
 	return valid, nil
+}
+
+func (s *Scanner) filterByDownloadSpeed(ctx context.Context, candidates []netip.Addr) ([]netip.Addr, map[netip.Addr]float64, map[string]int) {
+	limit := min(len(candidates), s.cfg.SpeedTest.MaxCandidates)
+	passed := make([]netip.Addr, 0, s.cfg.ValidIPCount)
+	speeds := make(map[netip.Addr]float64)
+	failures := map[string]int{}
+	for _, ip := range candidates[:limit] {
+		speed, err := s.downloadSpeed(ctx, ip)
+		if err != nil {
+			failures["speed_error"]++
+			s.logger.Debug("下载测速失败", "ip", ip.String(), "error", err)
+			continue
+		}
+		if speed <= 0 {
+			failures["speed_zero"]++
+			continue
+		}
+		if speed < s.cfg.SpeedTest.MinMBps {
+			failures["speed_low"]++
+			s.logger.Debug("下载速度未达标", "ip", ip.String(), "speed_mbps", speed, "min_mbps", s.cfg.SpeedTest.MinMBps)
+			continue
+		}
+		passed = append(passed, ip)
+		speeds[ip] = speed
+		if len(passed) >= s.cfg.ValidIPCount {
+			break
+		}
+	}
+	return passed, speeds, failures
+}
+
+func (s *Scanner) downloadSpeed(ctx context.Context, ip netip.Addr) (float64, error) {
+	u, err := url.Parse(s.cfg.SpeedTest.URL)
+	if err != nil {
+		return 0, err
+	}
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	target := net.JoinHostPort(ip.String(), port)
+	dialer := &net.Dialer{Timeout: s.cfg.DialTimeout.Value()}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, target)
+		},
+		TLSHandshakeTimeout: s.cfg.DialTimeout.Value(),
+		ForceAttemptHTTP2:   false,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	testCtx, cancel := context.WithTimeout(ctx, s.cfg.SpeedTest.Timeout.Value())
+	defer cancel()
+	req, err := http.NewRequestWithContext(testCtx, http.MethodGet, s.cfg.SpeedTest.URL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("User-Agent", "cfnat-linux speed-test")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("speed test HTTP %d", resp.StatusCode)
+	}
+	started := time.Now()
+	buf := make([]byte, 64*1024)
+	var bytesRead int64
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			bytesRead += int64(n)
+		}
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(testCtx.Err(), context.DeadlineExceeded) {
+				break
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, err
+		}
+		if testCtx.Err() != nil {
+			break
+		}
+	}
+	elapsed := time.Since(started).Seconds()
+	if bytesRead == 0 || elapsed <= 0 {
+		return 0, errors.New("speed test returned no data")
+	}
+	return float64(bytesRead) / 1000 / 1000 / elapsed, nil
 }
 
 func (s *Scanner) rankTCP(ctx context.Context, candidates []netip.Addr) ([]rankedIP, map[string]int) {
