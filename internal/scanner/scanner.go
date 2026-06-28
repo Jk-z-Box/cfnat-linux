@@ -78,17 +78,18 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 	for i := range candidates {
 		candidates[i] = ranked[i].IP
 	}
+	httpConcurrency := min(s.cfg.Concurrency, 20)
+	s.logger.Info("TCP 初筛完成", "reachable", len(ranked), "shortlist", len(candidates), "http_concurrency", httpConcurrency, "failures", tcpFailures)
 	speeds := map[netip.Addr]float64{}
 	if s.cfg.SpeedTest.Enabled {
 		var speedFailures map[string]int
 		candidates, speeds, speedFailures = s.filterByDownloadSpeed(ctx, candidates)
 		if len(candidates) == 0 {
+			s.logger.Warn("下载测速筛选无通过 IP", "tested", min(shortlistSize, s.cfg.SpeedTest.MaxCandidates), "min_mbps", s.cfg.SpeedTest.MinMBps, "failures", speedFailures)
 			return nil, fmt.Errorf("没有找到满足测速条件的 IP（失败统计: %s）", formatCounts(speedFailures))
 		}
 		s.logger.Info("下载测速筛选完成", "passed", len(candidates), "min_mbps", s.cfg.SpeedTest.MinMBps, "failures", speedFailures)
 	}
-	httpConcurrency := min(s.cfg.Concurrency, 20)
-	s.logger.Info("TCP 初筛完成", "reachable", len(ranked), "shortlist", len(candidates), "http_concurrency", httpConcurrency, "failures", tcpFailures)
 
 	scanCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -178,7 +179,7 @@ func (s *Scanner) filterByDownloadSpeed(ctx context.Context, candidates []netip.
 	for _, ip := range candidates[:limit] {
 		speed, err := s.downloadSpeed(ctx, ip)
 		if err != nil {
-			failures["speed_error"]++
+			failures[classifySpeedError(err)]++
 			s.logger.Debug("下载测速失败", "ip", ip.String(), "error", err)
 			continue
 		}
@@ -198,6 +199,46 @@ func (s *Scanner) filterByDownloadSpeed(ctx context.Context, candidates []netip.
 		}
 	}
 	return passed, speeds, failures
+}
+
+func classifySpeedError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return "speed_timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "speed_timeout"
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		text := strings.ToLower(urlErr.Err.Error())
+		switch {
+		case strings.Contains(text, "tls") || strings.Contains(text, "certificate") || strings.Contains(text, "handshake"):
+			return "speed_tls"
+		case strings.Contains(text, "connect") || strings.Contains(text, "connection refused") || strings.Contains(text, "no route"):
+			return "speed_connect"
+		case strings.Contains(text, "reset"):
+			return "speed_reset"
+		}
+	}
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "http "):
+		return "speed_status"
+	case strings.Contains(text, "no data"):
+		return "speed_no_data"
+	case strings.Contains(text, "tls") || strings.Contains(text, "certificate") || strings.Contains(text, "handshake"):
+		return "speed_tls"
+	case strings.Contains(text, "connect") || strings.Contains(text, "connection refused") || strings.Contains(text, "no route"):
+		return "speed_connect"
+	case strings.Contains(text, "reset"):
+		return "speed_reset"
+	default:
+		return "speed_error"
+	}
 }
 
 func (s *Scanner) downloadSpeed(ctx context.Context, ip netip.Addr) (float64, error) {
