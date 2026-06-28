@@ -56,6 +56,19 @@ prompt_max_latency() {
   done
 }
 
+prompt_min_healthy_count() {
+  local value
+  while true; do
+    read -r -p "健康 IP 少于多少个时整池重选 [5]: " value
+    value="${value:-5}"
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 10 )); then
+      MIN_HEALTHY_COUNT="${value}"
+      return
+    fi
+    retry "最小健康 IP 数必须是 1-10 的整数，且不能大于默认池大小 10"
+  done
+}
+
 prompt_colos() {
   local value item invalid
   local -a items
@@ -183,6 +196,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   prompt_listen
   prompt_ip_version
   prompt_max_latency
+  prompt_min_healthy_count
   if [[ "${IP_VERSION}" == "4" ]]; then SOURCE="https://www.cloudflare.com/ips-v4"; else SOURCE="https://www.cloudflare.com/ips-v6"; fi
   prompt_colos
   DNS_BOOL=false; ZONE_ID=""; RECORD_NAME=""; SYNC_COUNT=1; TOKEN=""
@@ -193,7 +207,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 3,
+  "config_version": 4,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -201,6 +215,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "max_candidates": 2000,
   "valid_ip_count": 20,
   "pool_size": 10,
+  "min_healthy_count": ${MIN_HEALTHY_COUNT},
   "concurrency": 100,
   "target_port": 443,
   "tls": true,

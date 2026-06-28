@@ -55,6 +55,7 @@ type Config struct {
 	MaxCandidates      int       `json:"max_candidates"`
 	ValidIPCount       int       `json:"valid_ip_count"`
 	PoolSize           int       `json:"pool_size"`
+	MinHealthyCount    int       `json:"min_healthy_count"`
 	Concurrency        int       `json:"concurrency"`
 	TargetPort         int       `json:"target_port"`
 	TLS                bool      `json:"tls"`
@@ -76,27 +77,28 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:  3,
-		Listen:         "0.0.0.0:1234",
-		IPVersion:      4,
-		IPSources:      []string{"https://www.cloudflare.com/ips-v4"},
-		RandomIPs:      true,
-		MaxCandidates:  2000,
-		ValidIPCount:   20,
-		PoolSize:       10,
-		Concurrency:    100,
-		TargetPort:     443,
-		TLS:            true,
-		CheckURL:       "https://cloudflare.com/cdn-cgi/trace",
-		ExpectedStatus: 200,
-		MaxLatency:     Duration(800 * time.Millisecond),
-		DialTimeout:    Duration(3 * time.Second),
-		ScanInterval:   Duration(6 * time.Hour),
-		HealthInterval: Duration(60 * time.Second),
-		HealthFailures: 3,
-		StateFile:      "/var/lib/cfnat/state.json",
-		SourceCacheDir: "/var/lib/cfnat/ip-cache",
-		LogLevel:       "info",
+		ConfigVersion:   4,
+		Listen:          "0.0.0.0:1234",
+		IPVersion:       4,
+		IPSources:       []string{"https://www.cloudflare.com/ips-v4"},
+		RandomIPs:       true,
+		MaxCandidates:   2000,
+		ValidIPCount:    20,
+		PoolSize:        10,
+		MinHealthyCount: 5,
+		Concurrency:     100,
+		TargetPort:      443,
+		TLS:             true,
+		CheckURL:        "https://cloudflare.com/cdn-cgi/trace",
+		ExpectedStatus:  200,
+		MaxLatency:      Duration(800 * time.Millisecond),
+		DialTimeout:     Duration(3 * time.Second),
+		ScanInterval:    Duration(6 * time.Hour),
+		HealthInterval:  Duration(60 * time.Second),
+		HealthFailures:  3,
+		StateFile:       "/var/lib/cfnat/state.json",
+		SourceCacheDir:  "/var/lib/cfnat/ip-cache",
+		LogLevel:        "info",
 		DNS: DNSConfig{
 			RecordType: "auto", SyncCount: 1, TTL: 1, TokenEnv: "CF_API_TOKEN",
 			Marker: "managed-by:cfnat-linux",
@@ -140,8 +142,12 @@ func Migrate(path string) (bool, error) {
 		raw["source_cache_dir"] = "/var/lib/cfnat/ip-cache"
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 3 {
-		raw["config_version"] = 3
+	if _, ok := raw["min_healthy_count"]; !ok {
+		raw["min_healthy_count"] = 5
+		changed = true
+	}
+	if version, _ := raw["config_version"].(float64); int(version) < 4 {
+		raw["config_version"] = 4
 		changed = true
 	}
 	if !changed {
@@ -172,6 +178,12 @@ func Set(path, key, value string) error {
 			return errors.New("延迟格式无效，请使用 300ms、1s 等格式")
 		}
 		cfg.MaxLatency = Duration(parsed)
+	case "min_healthy_count":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("min_healthy_count 必须是整数")
+		}
+		cfg.MinHealthyCount = parsed
 	case "zone_id":
 		cfg.DNS.ZoneID = value
 	case "record_name":
@@ -218,11 +230,14 @@ func (c *Config) Validate() error {
 	if len(c.IPSources) == 0 {
 		return errors.New("ip_sources 至少需要一个来源")
 	}
-	if c.MaxCandidates < 1 || c.Concurrency < 1 || c.ValidIPCount < 1 || c.PoolSize < 1 {
-		return errors.New("候选数、并发数、有效 IP 数和池大小必须大于 0")
+	if c.MaxCandidates < 1 || c.Concurrency < 1 || c.ValidIPCount < 1 || c.PoolSize < 1 || c.MinHealthyCount < 1 {
+		return errors.New("候选数、并发数、有效 IP 数、池大小和最小健康 IP 数必须大于 0")
 	}
 	if c.PoolSize > c.ValidIPCount {
 		return errors.New("pool_size 不能大于 valid_ip_count")
+	}
+	if c.MinHealthyCount > c.PoolSize {
+		return errors.New("min_healthy_count 不能大于 pool_size")
 	}
 	if c.TargetPort < 1 || c.TargetPort > 65535 {
 		return errors.New("target_port 超出范围")

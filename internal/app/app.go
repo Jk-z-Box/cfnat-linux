@@ -57,21 +57,23 @@ type RuntimeState struct {
 }
 
 type App struct {
-	cfg     config.Config
-	logger  *slog.Logger
-	scanner *scanner.Scanner
-	proxy   *proxy.Server
-	dns     *cloudflare.Client
-	mu      sync.Mutex
-	pool    []scanner.Result
-	state   RuntimeState
+	cfg      config.Config
+	logger   *slog.Logger
+	scanner  *scanner.Scanner
+	proxy    *proxy.Server
+	dns      *cloudflare.Client
+	mu       sync.Mutex
+	pool     []scanner.Result
+	failures map[netip.Addr]int
+	state    RuntimeState
 }
 
 func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner) *App {
 	return &App{
 		cfg: cfg, logger: logger, scanner: s,
-		proxy: proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
-		dns:   cloudflare.New(cfg.DNS),
+		proxy:    proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
+		dns:      cloudflare.New(cfg.DNS),
+		failures: make(map[netip.Addr]int),
 		state: RuntimeState{
 			Status: "starting", Listen: cfg.Listen, MaxLatency: cfg.MaxLatency.Value().String(),
 			DNS: DNSState{Enabled: cfg.DNS.Enabled, RecordName: cfg.DNS.RecordName},
@@ -104,7 +106,6 @@ func (a *App) maintain(ctx context.Context) {
 	healthTicker := time.NewTicker(a.cfg.HealthInterval.Value())
 	defer scanTicker.Stop()
 	defer healthTicker.Stop()
-	failures := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -123,19 +124,21 @@ func (a *App) maintain(ctx context.Context) {
 				}
 				continue
 			}
-			if a.poolHealthy(ctx) {
-				failures = 0
+			status := a.checkAndPrunePool(ctx)
+			if status.allHealthy {
 				continue
 			}
-			failures++
-			a.logger.Warn("目标池健康检查失败", "consecutive_failures", failures)
-			if failures >= a.cfg.HealthFailures {
+			if status.dnsNeedsSync {
+				a.syncDNS(ctx)
+			}
+			if status.healthyCount < a.cfg.MinHealthyCount {
+				a.logger.Warn("健康 IP 数低于阈值，触发整池重选", "healthy", status.healthyCount, "min_healthy_count", a.cfg.MinHealthyCount)
 				if err := a.rescan(ctx, "health"); err != nil {
 					a.logger.Error("故障重选失败，继续使用原池", "error", err)
-				} else {
-					failures = 0
 				}
+				continue
 			}
+			a.logger.Warn("目标池健康检查发现异常 IP，已保留健康 IP 继续转发", "healthy", status.healthyCount, "removed", status.removed)
 		}
 	}
 }
@@ -175,6 +178,7 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	}
 	a.mu.Lock()
 	a.pool = pool
+	a.failures = make(map[netip.Addr]int)
 	a.state.Status = "running"
 	a.state.PrimaryIP = pool[0].IP.String()
 	a.state.Targets = targets
@@ -190,70 +194,145 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	a.proxy.Update(pool)
 	a.saveState()
 
-	if a.cfg.DNS.Enabled {
-		ips := make([]netip.Addr, 0, len(pool))
-		for _, result := range pool {
-			ips = append(ips, result.IP)
-		}
-		err := a.dns.Sync(ctx, ips)
-		a.mu.Lock()
-		if err != nil {
-			a.state.DNS.Synced = false
-			a.state.DNS.LastError = err.Error()
-		} else {
-			syncedAt := time.Now().UTC()
-			a.state.DNS.Synced = true
-			a.state.DNS.LastError = ""
-			a.state.DNS.LastSyncedAt = &syncedAt
-			a.state.DNS.SyncedIPs = nil
-			for i := 0; i < min(a.cfg.DNS.SyncCount, len(ips)); i++ {
-				a.state.DNS.SyncedIPs = append(a.state.DNS.SyncedIPs, ips[i].String())
-			}
-		}
-		a.mu.Unlock()
-		a.saveState()
-		if err != nil {
-			a.logger.Error("Cloudflare DNS 同步失败，转发服务继续运行", "error", err)
-		} else {
-			a.logger.Info("Cloudflare DNS 同步完成", "record", a.cfg.DNS.RecordName, "count", min(a.cfg.DNS.SyncCount, len(ips)))
-		}
-	}
+	a.syncDNS(ctx)
 	return nil
 }
 
-func (a *App) poolHealthy(ctx context.Context) bool {
+type healthStatus struct {
+	allHealthy   bool
+	dnsNeedsSync bool
+	healthyCount int
+	removed      int
+}
+
+func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	a.mu.Lock()
 	pool := append([]scanner.Result(nil), a.pool...)
 	a.mu.Unlock()
 	if len(pool) == 0 {
-		return false
+		return healthStatus{allHealthy: false, healthyCount: 0}
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, a.cfg.DialTimeout.Value()*time.Duration(len(pool)+1))
 	defer cancel()
 	allHealthy := true
+	removed := make(map[netip.Addr]struct{})
 	for _, result := range pool {
 		checked, err := a.scanner.Probe(checkCtx, result.IP)
 		a.mu.Lock()
+		targetIndex := -1
 		for i := range a.state.Targets {
-			if a.state.Targets[i].IP != result.IP {
-				continue
+			if a.state.Targets[i].IP == result.IP {
+				targetIndex = i
+				break
 			}
-			a.state.Targets[i].CheckedAt = time.Now().UTC()
-			if err != nil {
-				a.state.Targets[i].Status = "unhealthy"
-				a.state.Targets[i].LastError = err.Error()
-				allHealthy = false
-			} else {
-				a.state.Targets[i].Status = "healthy"
-				a.state.Targets[i].LatencyMS = checked.LatencyMS
-				a.state.Targets[i].LastError = ""
+		}
+		if err != nil {
+			a.failures[result.IP]++
+			allHealthy = false
+			if targetIndex >= 0 {
+				a.state.Targets[targetIndex].CheckedAt = time.Now().UTC()
+				a.state.Targets[targetIndex].Status = "unhealthy"
+				a.state.Targets[targetIndex].LastError = err.Error()
 			}
-			break
+			if a.failures[result.IP] >= a.cfg.HealthFailures {
+				removed[result.IP] = struct{}{}
+			}
+		} else {
+			a.failures[result.IP] = 0
+			if targetIndex >= 0 {
+				a.state.Targets[targetIndex].Status = "healthy"
+				a.state.Targets[targetIndex].LatencyMS = checked.LatencyMS
+				a.state.Targets[targetIndex].CheckedAt = checked.CheckedAt
+				a.state.Targets[targetIndex].LastError = ""
+			}
 		}
 		a.mu.Unlock()
 	}
+	dnsNeedsSync := false
+	healthyCount := len(pool)
+	if len(removed) > 0 {
+		a.mu.Lock()
+		newPool := make([]scanner.Result, 0, len(a.pool))
+		targets := make([]TargetState, 0, len(a.state.Targets))
+		for _, result := range a.pool {
+			if _, drop := removed[result.IP]; drop {
+				delete(a.failures, result.IP)
+				continue
+			}
+			newPool = append(newPool, result)
+		}
+		for _, target := range a.state.Targets {
+			if _, drop := removed[target.IP]; drop {
+				continue
+			}
+			targets = append(targets, target)
+		}
+		a.pool = newPool
+		a.state.Targets = targets
+		a.state.PrimaryIP = ""
+		if len(newPool) > 0 {
+			a.state.PrimaryIP = newPool[0].IP.String()
+			a.state.Status = "running"
+		} else {
+			a.state.Status = "degraded"
+		}
+		for _, ip := range a.state.DNS.SyncedIPs {
+			parsed, err := netip.ParseAddr(ip)
+			if err != nil {
+				continue
+			}
+			if _, drop := removed[parsed]; drop {
+				dnsNeedsSync = true
+				break
+			}
+		}
+		pool = append([]scanner.Result(nil), newPool...)
+		healthyCount = len(newPool)
+		a.mu.Unlock()
+		a.proxy.Update(pool)
+		a.logger.Warn("不健康 IP 已从转发池剔除", "removed", len(removed), "remaining", len(pool))
+	}
 	a.saveState()
-	return allHealthy
+	return healthStatus{allHealthy: allHealthy && len(removed) == 0, dnsNeedsSync: dnsNeedsSync, healthyCount: healthyCount, removed: len(removed)}
+}
+
+func (a *App) syncDNS(ctx context.Context) {
+	if !a.cfg.DNS.Enabled {
+		return
+	}
+	a.mu.Lock()
+	pool := append([]scanner.Result(nil), a.pool...)
+	a.state.DNS.Synced = false
+	a.state.DNS.LastError = "同步中"
+	a.mu.Unlock()
+	a.saveState()
+
+	ips := make([]netip.Addr, 0, len(pool))
+	for _, result := range pool {
+		ips = append(ips, result.IP)
+	}
+	err := a.dns.Sync(ctx, ips)
+	a.mu.Lock()
+	if err != nil {
+		a.state.DNS.Synced = false
+		a.state.DNS.LastError = err.Error()
+	} else {
+		syncedAt := time.Now().UTC()
+		a.state.DNS.Synced = true
+		a.state.DNS.LastError = ""
+		a.state.DNS.LastSyncedAt = &syncedAt
+		a.state.DNS.SyncedIPs = nil
+		for i := 0; i < min(a.cfg.DNS.SyncCount, len(ips)); i++ {
+			a.state.DNS.SyncedIPs = append(a.state.DNS.SyncedIPs, ips[i].String())
+		}
+	}
+	a.mu.Unlock()
+	a.saveState()
+	if err != nil {
+		a.logger.Error("Cloudflare DNS 同步失败，转发服务继续运行", "error", err)
+	} else {
+		a.logger.Info("Cloudflare DNS 同步完成", "record", a.cfg.DNS.RecordName, "count", min(a.cfg.DNS.SyncCount, len(ips)))
+	}
 }
 
 func (a *App) setStatus(status string) {
@@ -318,6 +397,7 @@ func ReadState(path string) (RuntimeState, error) {
 func PrintStatus(w io.Writer, cfg config.Config) {
 	fmt.Fprintf(w, "监听地址        : %s\n", cfg.Listen)
 	fmt.Fprintf(w, "延迟上限        : %s（超过该值不优选）\n", cfg.MaxLatency.Value())
+	fmt.Fprintf(w, "重选阈值        : 健康 IP 少于 %d 个时整池重选\n", cfg.MinHealthyCount)
 	state, err := ReadState(cfg.StateFile)
 	if err != nil {
 		fmt.Fprintln(w, "运行状态        : 尚无状态数据")

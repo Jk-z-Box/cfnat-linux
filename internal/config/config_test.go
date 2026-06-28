@@ -79,6 +79,15 @@ func TestRejectInvalidListenAddress(t *testing.T) {
 	}
 }
 
+func TestRejectMinHealthyCountLargerThanPool(t *testing.T) {
+	cfg := Defaults()
+	cfg.PoolSize = 3
+	cfg.MinHealthyCount = 4
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected min healthy count validation error")
+	}
+}
+
 func TestAcceptIPv6ListenAddress(t *testing.T) {
 	cfg := Defaults()
 	cfg.Listen = "[::]:1234"

@@ -74,6 +74,17 @@ edit_latency() {
   done
 }
 
+edit_min_healthy_count() {
+  local value
+  while true; do
+    read -r -p "健康 IP 少于多少个时整池重选（例如 5）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]]; then
+      if set_config min_healthy_count "${value}"; then return; fi
+    fi
+    echo "请输入不大于 pool_size 的正整数。" >&2
+  done
+}
+
 edit_zone_id() {
   local value
   while true; do
@@ -131,7 +142,8 @@ config_menu() {
     echo "  4) Cloudflare Zone ID"
     echo "  5) DNS 解析域名"
     echo "  6) DNS 同步开关"
-    echo "  7) 使用编辑器修改完整配置"
+    echo "  7) 最小健康 IP 数"
+    echo "  8) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -141,7 +153,8 @@ config_menu() {
       4) edit_zone_id; pause_screen ;;
       5) edit_record_name; pause_screen ;;
       6) toggle_dns; pause_screen ;;
-      7)
+      7) edit_min_healthy_count; pause_screen ;;
+      8)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"
