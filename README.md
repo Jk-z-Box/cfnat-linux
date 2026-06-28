@@ -36,7 +36,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.7.1.tar.gz
+tar -xzf cfnat-linux-v0.7.2.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -147,7 +147,7 @@ DNS 同步分為兩類：
 | `health_failures` | `3` | 單個 IP 連續失敗多少次後判定不健康並剔除 |
 | `source_cache_dir` | `/var/lib/cfnat/ip-cache` | 遠端 IP 池成功下載後的本機快取目錄 |
 | `speed_test.enabled` | `false` | 是否啟用下載測速篩選 |
-| `speed_test.url` | `https://speed.cloudflare.com/__down?bytes=200000000` | 下載測速 URL |
+| `speed_test.url` | `https://speed.cloudflare.com/__down?bytes=50000000` | 下載測速 URL |
 | `speed_test.min_mbps` | `5` | 最低下載速度，單位 MB/s |
 | `speed_test.timeout` | `10s` | 單個 IP 下載測速時間 |
 | `speed_test.max_candidates` | `50` | TCP 初篩後最多測速的候選 IP 數 |
@@ -194,7 +194,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.7.1
+make release VERSION=v0.7.2
 ```
 
 ## 命令列

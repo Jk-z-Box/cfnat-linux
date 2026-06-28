@@ -1,5 +1,5 @@
 {
-  "config_version": 7,
+  "config_version": 8,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -29,7 +29,7 @@
   "log_level": "info",
   "speed_test": {
     "enabled": false,
-    "url": "https://speed.cloudflare.com/__down?bytes=200000000",
+    "url": "https://speed.cloudflare.com/__down?bytes=50000000",
     "min_mbps": 5,
     "timeout": "10s",
     "max_candidates": 50

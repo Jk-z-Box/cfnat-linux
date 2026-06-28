@@ -36,6 +36,31 @@ func TestMigrateBrokenDefaultEndpoint(t *testing.T) {
 	}
 }
 
+func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw := map[string]any{
+		"speed_test": map[string]any{
+			"enabled": false, "url": "https://speed.cloudflare.com/__down?bytes=200000000",
+			"min_mbps": 5, "timeout": "10s", "max_candidates": 50,
+		},
+	}
+	data, _ := json.Marshal(raw)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := Migrate(path)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SpeedTest.URL != "https://speed.cloudflare.com/__down?bytes=50000000" {
+		t.Fatalf("speed url = %q", cfg.SpeedTest.URL)
+	}
+}
+
 func TestDNSRecordTypeAuto(t *testing.T) {
 	cfg := Defaults()
 	cfg.DNS.Enabled = true

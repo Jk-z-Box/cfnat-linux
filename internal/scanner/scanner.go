@@ -227,6 +227,13 @@ func classifySpeedError(err error) string {
 	text := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(text, "http "):
+		fields := strings.Fields(text)
+		for _, field := range fields {
+			code := strings.Trim(field, ":,;")
+			if len(code) == 3 && code[0] >= '1' && code[0] <= '5' && code[1] >= '0' && code[1] <= '9' && code[2] >= '0' && code[2] <= '9' {
+				return "speed_status_" + code
+			}
+		}
 		return "speed_status"
 	case strings.Contains(text, "no data"):
 		return "speed_no_data"

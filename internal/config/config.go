@@ -89,7 +89,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          7,
+		ConfigVersion:          8,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -117,7 +117,7 @@ func Defaults() Config {
 			Marker: "managed-by:cfnat-linux", LatencySyncEnabled: false, LatencySyncInterval: Duration(5 * time.Minute),
 		},
 		SpeedTest: SpeedTestConfig{
-			Enabled: false, URL: "https://speed.cloudflare.com/__down?bytes=200000000",
+			Enabled: false, URL: "https://speed.cloudflare.com/__down?bytes=50000000",
 			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50,
 		},
 	}
@@ -179,13 +179,18 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["speed_test"]; !ok {
 		raw["speed_test"] = map[string]any{
-			"enabled": false, "url": "https://speed.cloudflare.com/__down?bytes=200000000",
+			"enabled": false, "url": "https://speed.cloudflare.com/__down?bytes=50000000",
 			"min_mbps": 5, "timeout": "10s", "max_candidates": 50,
 		}
 		changed = true
+	} else if speed, ok := raw["speed_test"].(map[string]any); ok {
+		if speed["url"] == "https://speed.cloudflare.com/__down?bytes=200000000" {
+			speed["url"] = "https://speed.cloudflare.com/__down?bytes=50000000"
+			changed = true
+		}
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 7 {
-		raw["config_version"] = 7
+	if version, _ := raw["config_version"].(float64); int(version) < 8 {
+		raw["config_version"] = 8
 		changed = true
 	}
 	if !changed {

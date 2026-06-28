@@ -279,7 +279,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 7,
+  "config_version": 8,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -307,7 +307,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "log_level": "info",
   "speed_test": {
     "enabled": ${SPEED_TEST_BOOL},
-    "url": "https://speed.cloudflare.com/__down?bytes=200000000",
+    "url": "https://speed.cloudflare.com/__down?bytes=50000000",
     "min_mbps": ${SPEED_TEST_MIN_MBPS},
     "timeout": "${SPEED_TEST_TIMEOUT}",
     "max_candidates": ${SPEED_TEST_MAX_CANDIDATES}
