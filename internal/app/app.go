@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -103,9 +104,11 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) maintain(ctx context.Context) {
 	scanTicker := time.NewTicker(a.cfg.ScanInterval.Value())
-	healthTicker := time.NewTicker(a.cfg.HealthInterval.Value())
+	monitorTicker := time.NewTicker(a.cfg.LatencyMonitorInterval.Value())
+	retryTicker := time.NewTicker(a.cfg.HealthInterval.Value())
 	defer scanTicker.Stop()
-	defer healthTicker.Stop()
+	defer monitorTicker.Stop()
+	defer retryTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -114,7 +117,7 @@ func (a *App) maintain(ctx context.Context) {
 			if err := a.rescan(ctx, "scheduled"); err != nil {
 				a.logger.Error("定时扫描失败，继续使用原池", "error", err)
 			}
-		case <-healthTicker.C:
+		case <-retryTicker.C:
 			a.mu.Lock()
 			empty := len(a.pool) == 0
 			a.mu.Unlock()
@@ -124,10 +127,14 @@ func (a *App) maintain(ctx context.Context) {
 				}
 				continue
 			}
-			status := a.checkAndPrunePool(ctx)
-			if status.allHealthy {
+		case <-monitorTicker.C:
+			a.mu.Lock()
+			empty := len(a.pool) == 0
+			a.mu.Unlock()
+			if empty {
 				continue
 			}
+			status := a.checkAndPrunePool(ctx)
 			if status.dnsNeedsSync {
 				a.syncDNS(ctx)
 			}
@@ -136,6 +143,9 @@ func (a *App) maintain(ctx context.Context) {
 				if err := a.rescan(ctx, "health"); err != nil {
 					a.logger.Error("故障重选失败，继续使用原池", "error", err)
 				}
+				continue
+			}
+			if status.allHealthy {
 				continue
 			}
 			a.logger.Warn("目标池健康检查发现异常 IP，已保留健康 IP 继续转发", "healthy", status.healthyCount, "removed", status.removed)
@@ -203,6 +213,7 @@ type healthStatus struct {
 	dnsNeedsSync bool
 	healthyCount int
 	removed      int
+	reordered    bool
 }
 
 func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
@@ -216,6 +227,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	defer cancel()
 	allHealthy := true
 	removed := make(map[netip.Addr]struct{})
+	checkedByIP := make(map[netip.Addr]scanner.Result, len(pool))
 	for _, result := range pool {
 		checked, err := a.scanner.Probe(checkCtx, result.IP)
 		a.mu.Lock()
@@ -239,6 +251,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 			}
 		} else {
 			a.failures[result.IP] = 0
+			checkedByIP[result.IP] = checked
 			if targetIndex >= 0 {
 				a.state.Targets[targetIndex].Status = "healthy"
 				a.state.Targets[targetIndex].LatencyMS = checked.LatencyMS
@@ -249,51 +262,126 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 		a.mu.Unlock()
 	}
 	dnsNeedsSync := false
+	reordered := false
 	healthyCount := len(pool)
-	if len(removed) > 0 {
-		a.mu.Lock()
-		newPool := make([]scanner.Result, 0, len(a.pool))
-		targets := make([]TargetState, 0, len(a.state.Targets))
-		for _, result := range a.pool {
-			if _, drop := removed[result.IP]; drop {
-				delete(a.failures, result.IP)
-				continue
-			}
-			newPool = append(newPool, result)
+	a.mu.Lock()
+	oldDNSIPs := a.desiredDNSIPsLocked()
+	newPool := make([]scanner.Result, 0, len(a.pool))
+	for _, result := range a.pool {
+		if _, drop := removed[result.IP]; drop {
+			delete(a.failures, result.IP)
+			continue
 		}
-		for _, target := range a.state.Targets {
-			if _, drop := removed[target.IP]; drop {
-				continue
-			}
-			targets = append(targets, target)
+		if checked, ok := checkedByIP[result.IP]; ok {
+			result.LatencyMS = checked.LatencyMS
+			result.Colo = checked.Colo
+			result.CheckedAt = checked.CheckedAt
+		} else if a.failures[result.IP] > 0 {
+			result.LatencyMS = 1 << 62
 		}
-		a.pool = newPool
-		a.state.Targets = targets
-		a.state.PrimaryIP = ""
-		if len(newPool) > 0 {
-			a.state.PrimaryIP = newPool[0].IP.String()
-			a.state.Status = "running"
-		} else {
-			a.state.Status = "degraded"
+		newPool = append(newPool, result)
+	}
+	sort.SliceStable(newPool, func(i, j int) bool {
+		if newPool[i].LatencyMS == newPool[j].LatencyMS {
+			return newPool[i].IP.String() < newPool[j].IP.String()
 		}
-		for _, ip := range a.state.DNS.SyncedIPs {
-			parsed, err := netip.ParseAddr(ip)
-			if err != nil {
-				continue
-			}
-			if _, drop := removed[parsed]; drop {
-				dnsNeedsSync = true
-				break
-			}
+		return newPool[i].LatencyMS < newPool[j].LatencyMS
+	})
+	oldOrder := make([]netip.Addr, 0, len(a.pool))
+	for _, result := range a.pool {
+		oldOrder = append(oldOrder, result.IP)
+	}
+	for i, result := range newPool {
+		if i >= len(oldOrder) || oldOrder[i] != result.IP {
+			reordered = true
+			break
 		}
-		pool = append([]scanner.Result(nil), newPool...)
-		healthyCount = len(newPool)
-		a.mu.Unlock()
+	}
+	a.pool = newPool
+	a.state.Targets = mergeTargetStates(newPool, a.state.Targets)
+	a.state.PrimaryIP = ""
+	if len(newPool) > 0 {
+		a.state.PrimaryIP = newPool[0].IP.String()
+		a.state.Status = "running"
+	} else {
+		a.state.Status = "degraded"
+	}
+	newDNSIPs := a.desiredDNSIPsLocked()
+	dnsNeedsSync = !sameStrings(oldDNSIPs, newDNSIPs)
+	pool = append([]scanner.Result(nil), newPool...)
+	healthyCount = len(newPool)
+	a.mu.Unlock()
+
+	if len(removed) > 0 || reordered {
 		a.proxy.Update(pool)
+	}
+	if len(removed) > 0 {
 		a.logger.Warn("不健康 IP 已从转发池剔除", "removed", len(removed), "remaining", len(pool))
 	}
+	if reordered {
+		a.logger.Info("转发池已按最新延迟重新排序", "primary_ip", valueOr(a.primaryIP(pool), "暂无"))
+	}
 	a.saveState()
-	return healthStatus{allHealthy: allHealthy && len(removed) == 0, dnsNeedsSync: dnsNeedsSync, healthyCount: healthyCount, removed: len(removed)}
+	return healthStatus{allHealthy: allHealthy && len(removed) == 0, dnsNeedsSync: dnsNeedsSync, healthyCount: healthyCount, removed: len(removed), reordered: reordered}
+}
+
+func mergeTargetStates(results []scanner.Result, existing []TargetState) []TargetState {
+	byIP := make(map[netip.Addr]TargetState, len(existing))
+	for _, target := range existing {
+		byIP[target.IP] = target
+	}
+	targets := make([]TargetState, 0, len(results))
+	for _, result := range results {
+		target := TargetState{IP: result.IP, LatencyMS: result.LatencyMS, Colo: result.Colo, Status: "healthy", CheckedAt: result.CheckedAt}
+		if old, ok := byIP[result.IP]; ok {
+			target.Status = old.Status
+			target.LastError = old.LastError
+			target.CheckedAt = old.CheckedAt
+			if old.Status == "healthy" {
+				target.LatencyMS = result.LatencyMS
+				target.Colo = result.Colo
+				target.CheckedAt = result.CheckedAt
+			}
+		}
+		targets = append(targets, target)
+	}
+	return targets
+}
+
+func (a *App) desiredDNSIPsLocked() []string {
+	if !a.cfg.DNS.Enabled {
+		return nil
+	}
+	ips := make([]string, 0, a.cfg.DNS.SyncCount)
+	for _, result := range a.pool {
+		ip := result.IP
+		if (a.cfg.DNS.RecordType == "A" && ip.Is4()) || (a.cfg.DNS.RecordType == "AAAA" && ip.Is6()) {
+			ips = append(ips, ip.String())
+		}
+		if len(ips) == a.cfg.DNS.SyncCount {
+			break
+		}
+	}
+	return ips
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) primaryIP(pool []scanner.Result) string {
+	if len(pool) == 0 {
+		return ""
+	}
+	return pool[0].IP.String()
 }
 
 func (a *App) syncDNS(ctx context.Context) {
@@ -397,6 +485,7 @@ func ReadState(path string) (RuntimeState, error) {
 func PrintStatus(w io.Writer, cfg config.Config) {
 	fmt.Fprintf(w, "监听地址        : %s\n", cfg.Listen)
 	fmt.Fprintf(w, "延迟上限        : %s（超过该值不优选）\n", cfg.MaxLatency.Value())
+	fmt.Fprintf(w, "延迟监控        : 每 %s 重新排序转发池\n", cfg.LatencyMonitorInterval.Value())
 	fmt.Fprintf(w, "重选阈值        : 健康 IP 少于 %d 个时整池重选\n", cfg.MinHealthyCount)
 	state, err := ReadState(cfg.StateFile)
 	if err != nil {

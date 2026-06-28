@@ -19,7 +19,6 @@ type Server struct {
 	timeout    time.Duration
 	logger     *slog.Logger
 	pool       atomic.Value
-	next       atomic.Uint64
 }
 
 func New(listen string, targetPort int, timeout time.Duration, logger *slog.Logger) *Server {
@@ -65,13 +64,12 @@ func (s *Server) handle(ctx context.Context, client net.Conn) {
 	if len(pool) == 0 {
 		return
 	}
-	start := int(s.next.Add(1)-1) % len(pool)
 	var upstream net.Conn
 	var target string
 	var err error
 	dialer := net.Dialer{Timeout: s.timeout}
 	for i := 0; i < len(pool); i++ {
-		selected := pool[(start+i)%len(pool)]
+		selected := pool[i]
 		target = net.JoinHostPort(selected.IP.String(), fmt.Sprint(s.targetPort))
 		upstream, err = dialer.DialContext(ctx, "tcp", target)
 		if err == nil {

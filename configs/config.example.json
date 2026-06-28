@@ -1,5 +1,5 @@
 {
-  "config_version": 4,
+  "config_version": 5,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -21,6 +21,7 @@
   "dial_timeout": "3s",
   "colos": [],
   "scan_interval": "6h",
+  "latency_monitor_interval": "2s",
   "health_interval": "60s",
   "health_failures": 3,
   "state_file": "/var/lib/cfnat/state.json",

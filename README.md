@@ -8,7 +8,8 @@
 - 隨機抽樣或依順序展開候選 IP。
 - 兩階段掃描：先進行輕量 TCP 初篩，再對最快候選執行 TLS、HTTP 狀態碼與延遲檢查，避免大併發完整請求觸發限速。
 - 可透過 `/cdn-cgi/trace` 依 Cloudflare `colo` 篩選資料中心。
-- 維護低延遲目標池，為本機連線進行輪詢 TCP 透傳。
+- 維護低延遲目標池，依最新延遲排序；新連線始終優先連線目前延遲最低的 IP，失敗時再依序 fallback。
+- 預設每 2 秒監控一次池內 IP 延遲，可自訂監控間隔並熱更新轉發順序。
 - 定期健康檢查；單個 IP 連續失敗後會先從轉發池剔除，剩餘健康 IP 繼續轉發。
 - 當健康 IP 少於自訂門檻時，背景觸發整池重選；重選成功後熱替換目標池。
 - 將前 N 個優選 IP 同步為 Cloudflare `A` 或 `AAAA` 記錄。
@@ -21,11 +22,11 @@
 ## 工作流程
 
 ```text
-IP/CIDR 來源 → 候選生成 → TCP 初篩 → TLS/HTTP 複篩 → 延遲排序 → 目標池 → TCP 轉發
+IP/CIDR 來源 → 候選生成 → TCP 初篩 → TLS/HTTP 複篩 → 延遲排序 → 目標池 → 最低延遲優先 TCP 轉發
                                   ↓
                          Cloudflare DNS 同步
                                   ↓
-                      定時健康檢查與重新優選
+                      延遲監控、健康剔除與重新優選
 ```
 
 ## 一鍵安裝
@@ -33,7 +34,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → TLS/HTTP 複篩 → 延遲排
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.4.0.tar.gz
+tar -xzf cfnat-linux-v0.5.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -44,6 +45,7 @@ sudo ./scripts/install.sh
 - IPv4 或 IPv6；
 - 最大允許延遲（毫秒）；
 - 健康 IP 少於幾個時觸發整池重選；
+- 延遲監控間隔（秒）；
 - 可選 Cloudflare 資料中心；
 - 是否同步 DNS；
 - Zone ID、完整記錄名稱和 API Token。
@@ -60,6 +62,7 @@ sudo cfnatctl
 
 - systemd 服務是否執行；
 - 監聽 IP、連接埠和最大允許延遲；
+- 延遲監控間隔；
 - 健康 IP 低於幾個時會整池重選；
 - 掃描正在進行、已經完成或失敗；
 - 目前最優 IP；
@@ -124,7 +127,8 @@ DNS 同步只刪除 `comment` 等於 `managed-by:cfnat-linux` 的舊記錄，不
 | `max_latency` | `800ms` | TLS/HTTP 首包最大延遲；超過閾值的 IP 直接淘汰 |
 | `colos` | `[]` | 例如 `HKG`、`NRT`、`SJC`；空陣列不篩選 |
 | `scan_interval` | `6h` | 定期完整重選週期 |
-| `health_interval` | `60s` | 目前池健康檢查週期 |
+| `latency_monitor_interval` | `2s` | 池內 IP 延遲監控與排序週期 |
+| `health_interval` | `60s` | 無可用 IP 時的背景重試週期 |
 | `health_failures` | `3` | 單個 IP 連續失敗多少次後判定不健康並剔除 |
 | `source_cache_dir` | `/var/lib/cfnat/ip-cache` | 遠端 IP 池成功下載後的本機快取目錄 |
 | `cloudflare_dns.sync_count` | `1` | 同步排名前幾個 IP |
@@ -168,7 +172,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.4.0
+make release VERSION=v0.5.0
 ```
 
 ## 命令列

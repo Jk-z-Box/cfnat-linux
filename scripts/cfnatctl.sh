@@ -85,6 +85,17 @@ edit_min_healthy_count() {
   done
 }
 
+edit_latency_monitor_interval() {
+  local value
+  while true; do
+    read -r -p "延迟监控间隔，单位秒（例如 2）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 3600 )); then
+      if set_config latency_monitor_interval "${value}s"; then return; fi
+    fi
+    echo "请输入 1-3600 的整数。" >&2
+  done
+}
+
 edit_zone_id() {
   local value
   while true; do
@@ -143,7 +154,8 @@ config_menu() {
     echo "  5) DNS 解析域名"
     echo "  6) DNS 同步开关"
     echo "  7) 最小健康 IP 数"
-    echo "  8) 使用编辑器修改完整配置"
+    echo "  8) 延迟监控间隔"
+    echo "  9) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -154,7 +166,8 @@ config_menu() {
       5) edit_record_name; pause_screen ;;
       6) toggle_dns; pause_screen ;;
       7) edit_min_healthy_count; pause_screen ;;
-      8)
+      8) edit_latency_monitor_interval; pause_screen ;;
+      9)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"

@@ -69,6 +69,19 @@ prompt_min_healthy_count() {
   done
 }
 
+prompt_latency_monitor_interval() {
+  local value
+  while true; do
+    read -r -p "延迟监控间隔，单位秒 [2]: " value
+    value="${value:-2}"
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 3600 )); then
+      LATENCY_MONITOR_INTERVAL="${value}s"
+      return
+    fi
+    retry "延迟监控间隔必须是 1-3600 的整数（秒）"
+  done
+}
+
 prompt_colos() {
   local value item invalid
   local -a items
@@ -197,6 +210,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   prompt_ip_version
   prompt_max_latency
   prompt_min_healthy_count
+  prompt_latency_monitor_interval
   if [[ "${IP_VERSION}" == "4" ]]; then SOURCE="https://www.cloudflare.com/ips-v4"; else SOURCE="https://www.cloudflare.com/ips-v6"; fi
   prompt_colos
   DNS_BOOL=false; ZONE_ID=""; RECORD_NAME=""; SYNC_COUNT=1; TOKEN=""
@@ -207,7 +221,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 4,
+  "config_version": 5,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -227,6 +241,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "dial_timeout": "3s",
   "colos": [${COLO_JSON}],
   "scan_interval": "6h",
+  "latency_monitor_interval": "${LATENCY_MONITOR_INTERVAL}",
   "health_interval": "60s",
   "health_failures": 3,
   "state_file": "/var/lib/cfnat/state.json",

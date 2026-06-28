@@ -47,58 +47,60 @@ type DNSConfig struct {
 }
 
 type Config struct {
-	ConfigVersion      int       `json:"config_version"`
-	Listen             string    `json:"listen"`
-	IPVersion          int       `json:"ip_version"`
-	IPSources          []string  `json:"ip_sources"`
-	RandomIPs          bool      `json:"random_ips"`
-	MaxCandidates      int       `json:"max_candidates"`
-	ValidIPCount       int       `json:"valid_ip_count"`
-	PoolSize           int       `json:"pool_size"`
-	MinHealthyCount    int       `json:"min_healthy_count"`
-	Concurrency        int       `json:"concurrency"`
-	TargetPort         int       `json:"target_port"`
-	TLS                bool      `json:"tls"`
-	TLSServerName      string    `json:"tls_server_name"`
-	InsecureSkipVerify bool      `json:"insecure_skip_verify"`
-	CheckURL           string    `json:"check_url"`
-	ExpectedStatus     int       `json:"expected_status"`
-	MaxLatency         Duration  `json:"max_latency"`
-	DialTimeout        Duration  `json:"dial_timeout"`
-	Colos              []string  `json:"colos"`
-	ScanInterval       Duration  `json:"scan_interval"`
-	HealthInterval     Duration  `json:"health_interval"`
-	HealthFailures     int       `json:"health_failures"`
-	StateFile          string    `json:"state_file"`
-	SourceCacheDir     string    `json:"source_cache_dir"`
-	LogLevel           string    `json:"log_level"`
-	DNS                DNSConfig `json:"cloudflare_dns"`
+	ConfigVersion          int       `json:"config_version"`
+	Listen                 string    `json:"listen"`
+	IPVersion              int       `json:"ip_version"`
+	IPSources              []string  `json:"ip_sources"`
+	RandomIPs              bool      `json:"random_ips"`
+	MaxCandidates          int       `json:"max_candidates"`
+	ValidIPCount           int       `json:"valid_ip_count"`
+	PoolSize               int       `json:"pool_size"`
+	MinHealthyCount        int       `json:"min_healthy_count"`
+	Concurrency            int       `json:"concurrency"`
+	TargetPort             int       `json:"target_port"`
+	TLS                    bool      `json:"tls"`
+	TLSServerName          string    `json:"tls_server_name"`
+	InsecureSkipVerify     bool      `json:"insecure_skip_verify"`
+	CheckURL               string    `json:"check_url"`
+	ExpectedStatus         int       `json:"expected_status"`
+	MaxLatency             Duration  `json:"max_latency"`
+	DialTimeout            Duration  `json:"dial_timeout"`
+	Colos                  []string  `json:"colos"`
+	ScanInterval           Duration  `json:"scan_interval"`
+	LatencyMonitorInterval Duration  `json:"latency_monitor_interval"`
+	HealthInterval         Duration  `json:"health_interval"`
+	HealthFailures         int       `json:"health_failures"`
+	StateFile              string    `json:"state_file"`
+	SourceCacheDir         string    `json:"source_cache_dir"`
+	LogLevel               string    `json:"log_level"`
+	DNS                    DNSConfig `json:"cloudflare_dns"`
 }
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:   4,
-		Listen:          "0.0.0.0:1234",
-		IPVersion:       4,
-		IPSources:       []string{"https://www.cloudflare.com/ips-v4"},
-		RandomIPs:       true,
-		MaxCandidates:   2000,
-		ValidIPCount:    20,
-		PoolSize:        10,
-		MinHealthyCount: 5,
-		Concurrency:     100,
-		TargetPort:      443,
-		TLS:             true,
-		CheckURL:        "https://cloudflare.com/cdn-cgi/trace",
-		ExpectedStatus:  200,
-		MaxLatency:      Duration(800 * time.Millisecond),
-		DialTimeout:     Duration(3 * time.Second),
-		ScanInterval:    Duration(6 * time.Hour),
-		HealthInterval:  Duration(60 * time.Second),
-		HealthFailures:  3,
-		StateFile:       "/var/lib/cfnat/state.json",
-		SourceCacheDir:  "/var/lib/cfnat/ip-cache",
-		LogLevel:        "info",
+		ConfigVersion:          5,
+		Listen:                 "0.0.0.0:1234",
+		IPVersion:              4,
+		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
+		RandomIPs:              true,
+		MaxCandidates:          2000,
+		ValidIPCount:           20,
+		PoolSize:               10,
+		MinHealthyCount:        5,
+		Concurrency:            100,
+		TargetPort:             443,
+		TLS:                    true,
+		CheckURL:               "https://cloudflare.com/cdn-cgi/trace",
+		ExpectedStatus:         200,
+		MaxLatency:             Duration(800 * time.Millisecond),
+		DialTimeout:            Duration(3 * time.Second),
+		ScanInterval:           Duration(6 * time.Hour),
+		LatencyMonitorInterval: Duration(2 * time.Second),
+		HealthInterval:         Duration(60 * time.Second),
+		HealthFailures:         3,
+		StateFile:              "/var/lib/cfnat/state.json",
+		SourceCacheDir:         "/var/lib/cfnat/ip-cache",
+		LogLevel:               "info",
 		DNS: DNSConfig{
 			RecordType: "auto", SyncCount: 1, TTL: 1, TokenEnv: "CF_API_TOKEN",
 			Marker: "managed-by:cfnat-linux",
@@ -146,8 +148,12 @@ func Migrate(path string) (bool, error) {
 		raw["min_healthy_count"] = 5
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 4 {
-		raw["config_version"] = 4
+	if _, ok := raw["latency_monitor_interval"]; !ok {
+		raw["latency_monitor_interval"] = "2s"
+		changed = true
+	}
+	if version, _ := raw["config_version"].(float64); int(version) < 5 {
+		raw["config_version"] = 5
 		changed = true
 	}
 	if !changed {
@@ -184,6 +190,12 @@ func Set(path, key, value string) error {
 			return errors.New("min_healthy_count 必须是整数")
 		}
 		cfg.MinHealthyCount = parsed
+	case "latency_monitor_interval":
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.New("latency_monitor_interval 格式无效，请使用 2s、500ms 等格式")
+		}
+		cfg.LatencyMonitorInterval = Duration(parsed)
 	case "zone_id":
 		cfg.DNS.ZoneID = value
 	case "record_name":
@@ -242,7 +254,7 @@ func (c *Config) Validate() error {
 	if c.TargetPort < 1 || c.TargetPort > 65535 {
 		return errors.New("target_port 超出范围")
 	}
-	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 {
+	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 || c.ScanInterval.Value() <= 0 || c.HealthInterval.Value() <= 0 || c.LatencyMonitorInterval.Value() <= 0 {
 		return errors.New("超时时间必须大于 0")
 	}
 	u, err := url.Parse(c.CheckURL)
