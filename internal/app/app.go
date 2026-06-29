@@ -104,17 +104,21 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) maintain(ctx context.Context) {
-	scanTicker := time.NewTicker(a.cfg.ScanInterval.Value())
+	var scanC <-chan time.Time
+	if a.cfg.ScanIntervalEnabled {
+		scanTicker := time.NewTicker(a.cfg.ScanInterval.Value())
+		defer scanTicker.Stop()
+		scanC = scanTicker.C
+	}
 	monitorTicker := time.NewTicker(a.cfg.LatencyMonitorInterval.Value())
 	retryTicker := time.NewTicker(a.cfg.HealthInterval.Value())
-	defer scanTicker.Stop()
 	defer monitorTicker.Stop()
 	defer retryTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-scanTicker.C:
+		case <-scanC:
 			if err := a.rescan(ctx, "scheduled"); err != nil {
 				a.logger.Error("定时扫描失败，继续使用原池", "error", err)
 			}
@@ -518,6 +522,11 @@ func ReadState(path string) (RuntimeState, error) {
 func PrintStatus(w io.Writer, cfg config.Config) {
 	fmt.Fprintf(w, "监听地址        : %s\n", cfg.Listen)
 	fmt.Fprintf(w, "延迟上限        : %s（超过该值不优选）\n", cfg.MaxLatency.Value())
+	if cfg.ScanIntervalEnabled {
+		fmt.Fprintf(w, "定时重选        : 已启用，每 %s\n", cfg.ScanInterval.Value())
+	} else {
+		fmt.Fprintln(w, "定时重选        : 未启用")
+	}
 	fmt.Fprintf(w, "延迟监控        : 每 %s 重新排序转发池\n", cfg.LatencyMonitorInterval.Value())
 	if cfg.SpeedTest.Enabled {
 		fmt.Fprintf(w, "测速筛选        : ≥ %.2f MB/s，最多测试 %d 个候选，并发 %d\n", cfg.SpeedTest.MinMBps, cfg.SpeedTest.MaxCandidates, cfg.SpeedTest.Concurrency)

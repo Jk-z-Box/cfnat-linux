@@ -188,6 +188,18 @@ toggle_dns_latency_sync() {
   done
 }
 
+toggle_scan_interval() {
+  local value
+  while true; do
+    read -r -p "启用定时完整重选？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config scan_interval_enabled true && return ;;
+      n|N|no|NO|No) set_config scan_interval_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
 edit_dns_latency_sync_interval() {
   local value
   while true; do
@@ -217,7 +229,8 @@ config_menu() {
     echo " 11) 下载测速筛选开关"
     echo " 12) 下载测速最低速度"
     echo " 13) 下载测速并发数"
-    echo " 14) 使用编辑器修改完整配置"
+    echo " 14) 定时完整重选开关"
+    echo " 15) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -234,7 +247,8 @@ config_menu() {
       11) toggle_speed_test; pause_screen ;;
       12) edit_speed_test_min; pause_screen ;;
       13) edit_speed_test_concurrency; pause_screen ;;
-      14)
+      14) toggle_scan_interval; pause_screen ;;
+      15)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"

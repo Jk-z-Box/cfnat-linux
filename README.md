@@ -36,7 +36,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.8.0.tar.gz
+tar -xzf cfnat-linux-v0.8.1.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -141,6 +141,7 @@ DNS 同步分為兩類：
 | `expected_status` | `200` | 期望回應碼 |
 | `max_latency` | `800ms` | TLS/HTTP 首包最大延遲；超過閾值的 IP 直接淘汰 |
 | `colos` | `[]` | 例如 `HKG`、`NRT`、`SJC`；空陣列不篩選 |
+| `scan_interval_enabled` | `true` | 是否啟用定期完整重選 |
 | `scan_interval` | `6h` | 定期完整重選週期 |
 | `latency_monitor_interval` | `2s` | 池內 IP 延遲監控與排序週期 |
 | `health_interval` | `60s` | 無可用 IP 時的背景重試週期 |
@@ -195,7 +196,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.8.0
+make release VERSION=v0.8.1
 ```
 
 ## 命令列

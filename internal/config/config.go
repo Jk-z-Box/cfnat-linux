@@ -77,6 +77,7 @@ type Config struct {
 	MaxLatency             Duration        `json:"max_latency"`
 	DialTimeout            Duration        `json:"dial_timeout"`
 	Colos                  []string        `json:"colos"`
+	ScanIntervalEnabled    bool            `json:"scan_interval_enabled"`
 	ScanInterval           Duration        `json:"scan_interval"`
 	LatencyMonitorInterval Duration        `json:"latency_monitor_interval"`
 	HealthInterval         Duration        `json:"health_interval"`
@@ -90,7 +91,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          9,
+		ConfigVersion:          10,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -106,6 +107,7 @@ func Defaults() Config {
 		ExpectedStatus:         200,
 		MaxLatency:             Duration(800 * time.Millisecond),
 		DialTimeout:            Duration(3 * time.Second),
+		ScanIntervalEnabled:    true,
 		ScanInterval:           Duration(6 * time.Hour),
 		LatencyMonitorInterval: Duration(2 * time.Second),
 		HealthInterval:         Duration(60 * time.Second),
@@ -194,8 +196,12 @@ func Migrate(path string) (bool, error) {
 			changed = true
 		}
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 9 {
-		raw["config_version"] = 9
+	if _, ok := raw["scan_interval_enabled"]; !ok {
+		raw["scan_interval_enabled"] = true
+		changed = true
+	}
+	if version, _ := raw["config_version"].(float64); int(version) < 10 {
+		raw["config_version"] = 10
 		changed = true
 	}
 	if !changed {
@@ -238,6 +244,12 @@ func Set(path, key, value string) error {
 			return errors.New("latency_monitor_interval 格式无效，请使用 2s、500ms 等格式")
 		}
 		cfg.LatencyMonitorInterval = Duration(parsed)
+	case "scan_interval_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("scan_interval_enabled 只能是 true 或 false")
+		}
+		cfg.ScanIntervalEnabled = parsed
 	case "zone_id":
 		cfg.DNS.ZoneID = value
 	case "record_name":

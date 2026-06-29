@@ -62,6 +62,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.SpeedTest.Concurrency != 3 {
 		t.Fatalf("speed concurrency = %d", cfg.SpeedTest.Concurrency)
 	}
+	if !cfg.ScanIntervalEnabled {
+		t.Fatal("expected scan interval to be enabled after migration")
+	}
 }
 
 func TestDNSRecordTypeAuto(t *testing.T) {

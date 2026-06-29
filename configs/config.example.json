@@ -1,5 +1,5 @@
 {
-  "config_version": 9,
+  "config_version": 10,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -20,6 +20,7 @@
   "max_latency": "800ms",
   "dial_timeout": "3s",
   "colos": [],
+  "scan_interval_enabled": true,
   "scan_interval": "6h",
   "latency_monitor_interval": "2s",
   "health_interval": "60s",

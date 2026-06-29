@@ -288,7 +288,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 9,
+  "config_version": 10,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -307,6 +307,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "max_latency": "${MAX_LATENCY}",
   "dial_timeout": "3s",
   "colos": [${COLO_JSON}],
+  "scan_interval_enabled": true,
   "scan_interval": "6h",
   "latency_monitor_interval": "${LATENCY_MONITOR_INTERVAL}",
   "health_interval": "60s",
