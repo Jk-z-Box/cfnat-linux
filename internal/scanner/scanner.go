@@ -173,32 +173,81 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 
 func (s *Scanner) filterByDownloadSpeed(ctx context.Context, candidates []netip.Addr) ([]netip.Addr, map[netip.Addr]float64, map[string]int) {
 	limit := min(len(candidates), s.cfg.SpeedTest.MaxCandidates)
-	passed := make([]netip.Addr, 0, s.cfg.ValidIPCount)
+	type speedJob struct {
+		index int
+		ip    netip.Addr
+	}
+	type speedResult struct {
+		index int
+		ip    netip.Addr
+		speed float64
+		err   error
+	}
+	testCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan speedJob)
+	results := make(chan speedResult, limit)
+	workers := min(s.cfg.SpeedTest.Concurrency, limit)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				speed, err := s.downloadSpeed(testCtx, job.ip)
+				select {
+				case results <- speedResult{index: job.index, ip: job.ip, speed: speed, err: err}:
+				case <-testCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for i, ip := range candidates[:limit] {
+			select {
+			case jobs <- speedJob{index: i, ip: ip}:
+			case <-testCtx.Done():
+				return
+			}
+		}
+	}()
+	go func() { wg.Wait(); close(results) }()
+
+	passed := make([]speedResult, 0, s.cfg.ValidIPCount)
 	speeds := make(map[netip.Addr]float64)
 	failures := map[string]int{}
-	for _, ip := range candidates[:limit] {
-		speed, err := s.downloadSpeed(ctx, ip)
-		if err != nil {
-			failures[classifySpeedError(err)]++
-			s.logger.Debug("下载测速失败", "ip", ip.String(), "error", err)
+	for result := range results {
+		if result.err != nil {
+			if errors.Is(result.err, context.Canceled) {
+				continue
+			}
+			failures[classifySpeedError(result.err)]++
+			s.logger.Debug("下载测速失败", "ip", result.ip.String(), "error", result.err)
 			continue
 		}
-		if speed <= 0 {
+		if result.speed <= 0 {
 			failures["speed_zero"]++
 			continue
 		}
-		if speed < s.cfg.SpeedTest.MinMBps {
+		if result.speed < s.cfg.SpeedTest.MinMBps {
 			failures["speed_low"]++
-			s.logger.Debug("下载速度未达标", "ip", ip.String(), "speed_mbps", speed, "min_mbps", s.cfg.SpeedTest.MinMBps)
+			s.logger.Debug("下载速度未达标", "ip", result.ip.String(), "speed_mbps", result.speed, "min_mbps", s.cfg.SpeedTest.MinMBps)
 			continue
 		}
-		passed = append(passed, ip)
-		speeds[ip] = speed
+		passed = append(passed, result)
+		speeds[result.ip] = result.speed
 		if len(passed) >= s.cfg.ValidIPCount {
-			break
+			cancel()
 		}
 	}
-	return passed, speeds, failures
+	sort.Slice(passed, func(i, j int) bool { return passed[i].index < passed[j].index })
+	ips := make([]netip.Addr, 0, len(passed))
+	for _, result := range passed {
+		ips = append(ips, result.ip)
+	}
+	return ips, speeds, failures
 }
 
 func classifySpeedError(err error) string {

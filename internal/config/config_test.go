@@ -59,6 +59,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.SpeedTest.URL != "https://speed.cloudflare.com/__down?bytes=50000000" {
 		t.Fatalf("speed url = %q", cfg.SpeedTest.URL)
 	}
+	if cfg.SpeedTest.Concurrency != 3 {
+		t.Fatalf("speed concurrency = %d", cfg.SpeedTest.Concurrency)
+	}
 }
 
 func TestDNSRecordTypeAuto(t *testing.T) {
@@ -127,6 +130,15 @@ func TestRejectInvalidSpeedTestThreshold(t *testing.T) {
 	cfg.SpeedTest.MinMBps = 0
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected speed threshold validation error")
+	}
+}
+
+func TestRejectInvalidSpeedTestConcurrency(t *testing.T) {
+	cfg := Defaults()
+	cfg.SpeedTest.Enabled = true
+	cfg.SpeedTest.Concurrency = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected speed concurrency validation error")
 	}
 }
 

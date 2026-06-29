@@ -1,5 +1,5 @@
 {
-  "config_version": 8,
+  "config_version": 9,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -32,7 +32,8 @@
     "url": "https://speed.cloudflare.com/__down?bytes=50000000",
     "min_mbps": 5,
     "timeout": "10s",
-    "max_candidates": 50
+    "max_candidates": 50,
+    "concurrency": 3
   },
   "cloudflare_dns": {
     "enabled": false,

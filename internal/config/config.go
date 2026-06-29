@@ -54,6 +54,7 @@ type SpeedTestConfig struct {
 	MinMBps       float64  `json:"min_mbps"`
 	Timeout       Duration `json:"timeout"`
 	MaxCandidates int      `json:"max_candidates"`
+	Concurrency   int      `json:"concurrency"`
 }
 
 type Config struct {
@@ -89,7 +90,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          8,
+		ConfigVersion:          9,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -118,7 +119,7 @@ func Defaults() Config {
 		},
 		SpeedTest: SpeedTestConfig{
 			Enabled: false, URL: "https://speed.cloudflare.com/__down?bytes=50000000",
-			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50,
+			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50, Concurrency: 3,
 		},
 	}
 }
@@ -180,7 +181,7 @@ func Migrate(path string) (bool, error) {
 	if _, ok := raw["speed_test"]; !ok {
 		raw["speed_test"] = map[string]any{
 			"enabled": false, "url": "https://speed.cloudflare.com/__down?bytes=50000000",
-			"min_mbps": 5, "timeout": "10s", "max_candidates": 50,
+			"min_mbps": 5, "timeout": "10s", "max_candidates": 50, "concurrency": 3,
 		}
 		changed = true
 	} else if speed, ok := raw["speed_test"].(map[string]any); ok {
@@ -188,9 +189,13 @@ func Migrate(path string) (bool, error) {
 			speed["url"] = "https://speed.cloudflare.com/__down?bytes=50000000"
 			changed = true
 		}
+		if _, ok := speed["concurrency"]; !ok {
+			speed["concurrency"] = 3
+			changed = true
+		}
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 8 {
-		raw["config_version"] = 8
+	if version, _ := raw["config_version"].(float64); int(version) < 9 {
+		raw["config_version"] = 9
 		changed = true
 	}
 	if !changed {
@@ -267,6 +272,12 @@ func Set(path, key, value string) error {
 			return errors.New("speed_test_enabled 只能是 true 或 false")
 		}
 		cfg.SpeedTest.Enabled = parsed
+	case "speed_test_concurrency":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("speed_test_concurrency 必须是整数")
+		}
+		cfg.SpeedTest.Concurrency = parsed
 	default:
 		return fmt.Errorf("不允许修改的配置项: %s", key)
 	}
@@ -327,6 +338,9 @@ func (c *Config) Validate() error {
 		}
 		if c.SpeedTest.MaxCandidates < 1 {
 			return errors.New("speed_test.max_candidates 必须大于 0")
+		}
+		if c.SpeedTest.Concurrency < 1 {
+			return errors.New("speed_test.concurrency 必须大于 0")
 		}
 		u, err := url.Parse(c.SpeedTest.URL)
 		if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") {

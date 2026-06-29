@@ -107,6 +107,17 @@ edit_speed_test_min() {
   done
 }
 
+edit_speed_test_concurrency() {
+  local value
+  while true; do
+    read -r -p "下载测速并发数（例如 3）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 50 )); then
+      if set_config speed_test_concurrency "${value}"; then return; fi
+    fi
+    echo "请输入 1-50 的整数。" >&2
+  done
+}
+
 toggle_speed_test() {
   local value
   while true; do
@@ -205,7 +216,8 @@ config_menu() {
     echo " 10) DNS 延迟排序同步冷却时间"
     echo " 11) 下载测速筛选开关"
     echo " 12) 下载测速最低速度"
-    echo " 13) 使用编辑器修改完整配置"
+    echo " 13) 下载测速并发数"
+    echo " 14) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -221,7 +233,8 @@ config_menu() {
       10) edit_dns_latency_sync_interval; pause_screen ;;
       11) toggle_speed_test; pause_screen ;;
       12) edit_speed_test_min; pause_screen ;;
-      13)
+      13) edit_speed_test_concurrency; pause_screen ;;
+      14)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"

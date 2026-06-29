@@ -520,7 +520,7 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 	fmt.Fprintf(w, "延迟上限        : %s（超过该值不优选）\n", cfg.MaxLatency.Value())
 	fmt.Fprintf(w, "延迟监控        : 每 %s 重新排序转发池\n", cfg.LatencyMonitorInterval.Value())
 	if cfg.SpeedTest.Enabled {
-		fmt.Fprintf(w, "测速筛选        : ≥ %.2f MB/s，最多测试 %d 个候选\n", cfg.SpeedTest.MinMBps, cfg.SpeedTest.MaxCandidates)
+		fmt.Fprintf(w, "测速筛选        : ≥ %.2f MB/s，最多测试 %d 个候选，并发 %d\n", cfg.SpeedTest.MinMBps, cfg.SpeedTest.MaxCandidates, cfg.SpeedTest.Concurrency)
 	} else {
 		fmt.Fprintln(w, "测速筛选        : 未启用")
 	}

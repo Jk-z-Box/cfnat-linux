@@ -119,6 +119,15 @@ prompt_speed_test_settings() {
     fi
     retry "最多测速候选数必须是 1-1000 的整数"
   done
+  while [[ "${SPEED_TEST_BOOL}" == true ]]; do
+    read -r -p "下载测速并发数 [3]: " value
+    value="${value:-3}"
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 50 )); then
+      SPEED_TEST_CONCURRENCY="${value}"
+      break
+    fi
+    retry "下载测速并发数必须是 1-50 的整数"
+  done
 }
 
 prompt_colos() {
@@ -267,7 +276,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   prompt_max_latency
   prompt_min_healthy_count
   prompt_latency_monitor_interval
-  SPEED_TEST_BOOL=false; SPEED_TEST_MIN_MBPS=5; SPEED_TEST_TIMEOUT="10s"; SPEED_TEST_MAX_CANDIDATES=50
+  SPEED_TEST_BOOL=false; SPEED_TEST_MIN_MBPS=5; SPEED_TEST_TIMEOUT="10s"; SPEED_TEST_MAX_CANDIDATES=50; SPEED_TEST_CONCURRENCY=3
   prompt_speed_test_settings
   if [[ "${IP_VERSION}" == "4" ]]; then SOURCE="https://www.cloudflare.com/ips-v4"; else SOURCE="https://www.cloudflare.com/ips-v6"; fi
   prompt_colos
@@ -279,7 +288,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 8,
+  "config_version": 9,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -310,7 +319,8 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "url": "https://speed.cloudflare.com/__down?bytes=50000000",
     "min_mbps": ${SPEED_TEST_MIN_MBPS},
     "timeout": "${SPEED_TEST_TIMEOUT}",
-    "max_candidates": ${SPEED_TEST_MAX_CANDIDATES}
+    "max_candidates": ${SPEED_TEST_MAX_CANDIDATES},
+    "concurrency": ${SPEED_TEST_CONCURRENCY}
   },
   "cloudflare_dns": {
     "enabled": ${DNS_BOOL},

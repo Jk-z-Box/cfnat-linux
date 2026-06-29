@@ -36,7 +36,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.7.2.tar.gz
+tar -xzf cfnat-linux-v0.8.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -48,7 +48,7 @@ sudo ./scripts/install.sh
 - 最大允許延遲（毫秒）；
 - 健康 IP 少於幾個時觸發整池重選；
 - 延遲監控間隔（秒）；
-- 是否啟用下載測速篩選、最低下載速度、單 IP 測速時間和最多測速候選數；
+- 是否啟用下載測速篩選、最低下載速度、單 IP 測速時間、最多測速候選數和測速並發數；
 - 可選 Cloudflare 資料中心；
 - 是否同步 DNS；
 - Zone ID、完整記錄名稱和 API Token。
@@ -151,6 +151,7 @@ DNS 同步分為兩類：
 | `speed_test.min_mbps` | `5` | 最低下載速度，單位 MB/s |
 | `speed_test.timeout` | `10s` | 單個 IP 下載測速時間 |
 | `speed_test.max_candidates` | `50` | TCP 初篩後最多測速的候選 IP 數 |
+| `speed_test.concurrency` | `3` | 下載測速並發數 |
 | `cloudflare_dns.sync_count` | `1` | 同步排名前幾個 IP |
 | `cloudflare_dns.ttl` | `1` | Cloudflare API 中 `1` 表示自動 TTL |
 | `cloudflare_dns.latency_sync_enabled` | `false` | 是否允許 DNS 按延遲排序冷卻同步 |
@@ -194,7 +195,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.7.2
+make release VERSION=v0.8.0
 ```
 
 ## 命令列
