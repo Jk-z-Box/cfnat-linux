@@ -79,19 +79,20 @@ type RuntimeState struct {
 }
 
 type App struct {
-	cfg      config.Config
-	logger   *slog.Logger
-	scanner  *scanner.Scanner
-	proxy    *proxy.Server
-	dns      *cloudflare.Client
-	version  string
-	mu       sync.Mutex
-	pool     []scanner.Result
-	failures map[netip.Addr]int
-	state    RuntimeState
+	cfg        config.Config
+	logger     *slog.Logger
+	scanner    *scanner.Scanner
+	proxy      *proxy.Server
+	dns        *cloudflare.Client
+	version    string
+	configPath string
+	mu         sync.Mutex
+	pool       []scanner.Result
+	failures   map[netip.Addr]int
+	state      RuntimeState
 }
 
-func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version string) *App {
+func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version, configPath string) *App {
 	state := RuntimeState{
 		Status: "starting", Listen: cfg.Listen, MaxLatency: cfg.MaxLatency.Value().String(),
 		DNS: DNSState{Enabled: cfg.DNS.Enabled, RecordName: cfg.DNS.RecordName},
@@ -112,11 +113,12 @@ func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version str
 	}
 	return &App{
 		cfg: cfg, logger: logger, scanner: s,
-		proxy:    proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
-		dns:      cloudflare.New(cfg.DNS),
-		version:  version,
-		failures: make(map[netip.Addr]int),
-		state:    state,
+		proxy:      proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
+		dns:        cloudflare.New(cfg.DNS),
+		version:    version,
+		configPath: configPath,
+		failures:   make(map[netip.Addr]int),
+		state:      state,
 	}
 }
 
@@ -129,6 +131,9 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.proxy.Serve(ctx) }()
+	if a.cfg.Web.Enabled {
+		go func() { errCh <- a.serveWeb(ctx) }()
+	}
 	go a.maintain(ctx)
 	select {
 	case <-ctx.Done():
@@ -631,6 +636,16 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 		fmt.Fprintln(w, "后台自动更新    : 已启用")
 	} else {
 		fmt.Fprintln(w, "后台自动更新    : 未启用")
+	}
+	if cfg.Web.Enabled {
+		fmt.Fprintf(w, "Web 管理面板    : 已启用，监听 %s\n", cfg.Web.Listen)
+	} else {
+		fmt.Fprintln(w, "Web 管理面板    : 未启用")
+	}
+	if cfg.Shodan.Enabled {
+		fmt.Fprintln(w, "Shodan IP Panel : 已启用")
+	} else {
+		fmt.Fprintln(w, "Shodan IP Panel : 未启用")
 	}
 	state, err := ReadState(cfg.StateFile)
 	if err != nil {

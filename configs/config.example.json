@@ -1,5 +1,5 @@
 {
-  "config_version": 12,
+  "config_version": 13,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -45,6 +45,14 @@
     "check_interval": "6h",
     "auto_update_enabled": false,
     "repository": "Jk-z-Box/cfnat-linux"
+  },
+  "web": {
+    "enabled": false,
+    "listen": "0.0.0.0:8787"
+  },
+  "shodan": {
+    "enabled": false,
+    "data_dir": "/var/lib/cfnat/shodan"
   },
   "cloudflare_dns": {
     "enabled": false,

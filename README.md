@@ -22,6 +22,8 @@
 - 顯示當日掃描/重選觸發次數，方便觀察是否頻繁重掃。
 - 管理面板可選啟用管理密碼，支援開關與修改；配置只保存 SHA-256 雜湊，不保存明文。
 - 定時檢查 GitHub Release；有新版本時顯示在狀態面板，並可選擇啟用 systemd timer 背景自動更新。
+- 可選啟用 Web 管理面板，透過瀏覽器查看 cfnat 狀態、保存常用配置、觸發重掃，並統一管理 Shodan IP Panel。
+- 內建 Shodan IP Panel：支援多配置、Shodan API 查詢、IP 結果保存與下載連結開關。
 - 支援 Linux amd64、arm64 和 386。
 
 ## 工作流程
@@ -39,7 +41,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.10.0.tar.gz
+tar -xzf cfnat-linux-v0.11.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -51,6 +53,8 @@ sudo ./scripts/install.sh
 - 最大允許延遲（毫秒）；
 - 健康 IP 少於幾個時觸發整池重選；
 - 延遲監控間隔（秒）；
+- 是否啟用 Web 管理面板與監聽地址；
+- 是否啟用 Shodan IP Panel；
 - 是否啟用下載測速篩選、最低下載速度、單 IP 測速時間、最多測速候選數和測速並發數；
 - 可選 Cloudflare 資料中心；
 - 是否同步 DNS；
@@ -79,10 +83,38 @@ sudo cfnatctl
 - Cloudflare DNS 是否啟用、是否同步成功、解析網域和同步 IP。
 - DNS 延遲排序同步是否啟用，以及冷卻時間。
 - 是否啟用定時檢查更新、背景自動更新，以及是否發現新版本。
+- Web 管理面板與 Shodan IP Panel 是否啟用。
 
 面板下方提供執行開關、立即重掃、診斷掃描、立即檢查並更新、修改設定、即時日誌以及一鍵關閉並解除安裝。執行狀態同時儲存於 `/var/lib/cfnat/state.json`。
 
 可在 `sudo cfnatctl` → 修改配置 中啟用管理密碼。啟用後，進入管理面板、啟停服務、重啟掃描、修改配置和解除安裝都需要輸入管理密碼；`status`、`logs`、`check` 等只讀命令不需要密碼。密碼以 SHA-256 雜湊形式保存在 `/etc/cfnat/config.json`。
+
+## Web 管理面板與 Shodan IP Panel
+
+Web 面板可在安裝精靈或 `sudo cfnatctl` → 修改配置 中啟用，預設監聽地址為：
+
+```text
+0.0.0.0:8787
+```
+
+如果已啟用管理密碼，Web 面板會使用同一個管理密碼登入；如果未啟用管理密碼，Web 面板不要求登入，因此不建議直接暴露到公網。
+
+Web 面板目前可管理：
+
+- 查看 cfnat 完整狀態；
+- 觸發 cfnat 立即重新掃描；
+- 修改常用 cfnat 配置；
+- 啟用/停用 Shodan IP Panel；
+- 管理 Shodan 多配置、API Key、查詢條件、抓取數量；
+- 執行 Shodan 查詢並下載生成的 IP 檔案。
+
+Web 面板運行在 cfnat 服務內，保持低權限執行。啟停服務、解除安裝、查看 journald 即時日誌和手動更新仍保留在 SSH 管理菜單中完成，避免 Web 面板持有 root 級 systemd 控制權限。
+
+Shodan IP Panel 的資料保存在：
+
+```text
+/var/lib/cfnat/shodan
+```
 
 掃描日誌會彙總失敗原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。這樣可以直接判斷是線路不可達、TLS/SNI、探測網址、延遲閾值還是機房篩選導致無結果。
 
@@ -177,6 +209,10 @@ DNS 同步分為兩類：
 | `update.check_interval` | `6h` | 檢查更新週期 |
 | `update.auto_update_enabled` | `false` | 是否允許背景自動下載並安裝新版 |
 | `update.repository` | `Jk-z-Box/cfnat-linux` | 檢查更新使用的 GitHub 倉庫 |
+| `web.enabled` | `false` | 是否啟用 Web 管理面板 |
+| `web.listen` | `0.0.0.0:8787` | Web 管理面板監聽地址 |
+| `shodan.enabled` | `false` | 是否啟用內建 Shodan IP Panel |
+| `shodan.data_dir` | `/var/lib/cfnat/shodan` | Shodan 配置、狀態和結果保存目錄 |
 | `cloudflare_dns.sync_count` | `1` | 同步排名前幾個 IP |
 | `cloudflare_dns.ttl` | `1` | Cloudflare API 中 `1` 表示自動 TTL |
 | `cloudflare_dns.latency_sync_enabled` | `false` | 是否允許 DNS 按延遲排序冷卻同步 |
@@ -220,7 +256,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.10.0
+make release VERSION=v0.11.0
 ```
 
 ## 命令列

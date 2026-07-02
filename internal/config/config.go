@@ -69,6 +69,16 @@ type UpdateConfig struct {
 	Repository        string   `json:"repository"`
 }
 
+type WebConfig struct {
+	Enabled bool   `json:"enabled"`
+	Listen  string `json:"listen"`
+}
+
+type ShodanConfig struct {
+	Enabled bool   `json:"enabled"`
+	DataDir string `json:"data_dir"`
+}
+
 type Config struct {
 	ConfigVersion          int              `json:"config_version"`
 	Listen                 string           `json:"listen"`
@@ -101,11 +111,13 @@ type Config struct {
 	SpeedTest              SpeedTestConfig  `json:"speed_test"`
 	Management             ManagementConfig `json:"management"`
 	Update                 UpdateConfig     `json:"update"`
+	Web                    WebConfig        `json:"web"`
+	Shodan                 ShodanConfig     `json:"shodan"`
 }
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          12,
+		ConfigVersion:          13,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -142,6 +154,8 @@ func Defaults() Config {
 			CheckEnabled: true, CheckInterval: Duration(6 * time.Hour), AutoUpdateEnabled: false,
 			Repository: "Jk-z-Box/cfnat-linux",
 		},
+		Web:    WebConfig{Enabled: false, Listen: "0.0.0.0:8787"},
+		Shodan: ShodanConfig{Enabled: false, DataDir: "/var/lib/cfnat/shodan"},
 	}
 }
 
@@ -246,8 +260,16 @@ func Migrate(path string) (bool, error) {
 			changed = true
 		}
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 12 {
-		raw["config_version"] = 12
+	if _, ok := raw["web"]; !ok {
+		raw["web"] = map[string]any{"enabled": false, "listen": "0.0.0.0:8787"}
+		changed = true
+	}
+	if _, ok := raw["shodan"]; !ok {
+		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
+		changed = true
+	}
+	if version, _ := raw["config_version"].(float64); int(version) < 13 {
+		raw["config_version"] = 13
 		changed = true
 	}
 	if !changed {
@@ -322,6 +344,20 @@ func Set(path, key, value string) error {
 			return errors.New("update_check_interval 格式无效，请使用 6h、24h 等格式")
 		}
 		cfg.Update.CheckInterval = Duration(parsed)
+	case "web_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("web_enabled 只能是 true 或 false")
+		}
+		cfg.Web.Enabled = parsed
+	case "web_listen":
+		cfg.Web.Listen = value
+	case "shodan_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("shodan_enabled 只能是 true 或 false")
+		}
+		cfg.Shodan.Enabled = parsed
 	case "zone_id":
 		cfg.DNS.ZoneID = value
 	case "record_name":
@@ -415,6 +451,14 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Update.Repository) == "" || !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(c.Update.Repository) {
 		return errors.New("update.repository 必须是 owner/repo 格式")
+	}
+	if c.Web.Enabled {
+		if _, _, err := net.SplitHostPort(c.Web.Listen); err != nil {
+			return fmt.Errorf("web.listen 格式无效，应类似 0.0.0.0:8787 或 [::]:8787: %w", err)
+		}
+	}
+	if strings.TrimSpace(c.Shodan.DataDir) == "" {
+		return errors.New("shodan.data_dir 不能为空")
 	}
 	if c.Management.PasswordSHA256 != "" && !regexp.MustCompile(`^[a-fA-F0-9]{64}$`).MatchString(c.Management.PasswordSHA256) {
 		return errors.New("management.password_sha256 必须是空值或 64 位 SHA-256 十六进制字符串")

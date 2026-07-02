@@ -77,6 +77,15 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.Update.Repository != "Jk-z-Box/cfnat-linux" {
 		t.Fatalf("update repository = %q", cfg.Update.Repository)
 	}
+	if cfg.Web.Enabled {
+		t.Fatal("expected web panel to be disabled after migration")
+	}
+	if cfg.Web.Listen != "0.0.0.0:8787" {
+		t.Fatalf("web listen = %q", cfg.Web.Listen)
+	}
+	if cfg.Shodan.Enabled {
+		t.Fatal("expected shodan panel to be disabled after migration")
+	}
 }
 
 func TestDNSRecordTypeAuto(t *testing.T) {
@@ -171,6 +180,15 @@ func TestRejectInvalidUpdateRepository(t *testing.T) {
 	cfg.Update.Repository = "not-owner-repo"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected invalid update repository validation error")
+	}
+}
+
+func TestRejectInvalidWebListen(t *testing.T) {
+	cfg := Defaults()
+	cfg.Web.Enabled = true
+	cfg.Web.Listen = "bad-listen"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid web listen validation error")
 	}
 }
 

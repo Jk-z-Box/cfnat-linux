@@ -84,6 +84,43 @@ prompt_latency_monitor_interval() {
   done
 }
 
+prompt_web_settings() {
+  local value port
+  while true; do
+    read -r -p "启用 Web 管理面板？[y/N]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) WEB_BOOL=true; break ;;
+      ""|n|N|no|NO|No) WEB_BOOL=false; break ;;
+      *) retry "请输入 y 或 n" ;;
+    esac
+  done
+  WEB_LISTEN="0.0.0.0:8787"
+  while [[ "${WEB_BOOL}" == true ]]; do
+    read -r -p "Web 管理面板监听地址 [0.0.0.0:8787]: " value
+    value="${value:-0.0.0.0:8787}"
+    if [[ "${value}" =~ ^(\[[0-9A-Fa-f:.%]+\]|[A-Za-z0-9._-]+):([0-9]{1,5})$ ]]; then
+      port=$((10#${BASH_REMATCH[2]}))
+      if (( port >= 1 && port <= 65535 )); then
+        WEB_LISTEN="${value}"
+        break
+      fi
+    fi
+    retry "Web 监听地址应类似 0.0.0.0:8787 或 [::]:8787"
+  done
+}
+
+prompt_shodan_settings() {
+  local value
+  while true; do
+    read -r -p "启用 Shodan IP Panel？[y/N]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) SHODAN_BOOL=true; return ;;
+      ""|n|N|no|NO|No) SHODAN_BOOL=false; return ;;
+      *) retry "请输入 y 或 n" ;;
+    esac
+  done
+}
+
 prompt_speed_test_settings() {
   local value
   while true; do
@@ -278,6 +315,9 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   prompt_max_latency
   prompt_min_healthy_count
   prompt_latency_monitor_interval
+  WEB_BOOL=false; WEB_LISTEN="0.0.0.0:8787"; SHODAN_BOOL=false
+  prompt_web_settings
+  prompt_shodan_settings
   SPEED_TEST_BOOL=false; SPEED_TEST_MIN_MBPS=5; SPEED_TEST_TIMEOUT="10s"; SPEED_TEST_MAX_CANDIDATES=50; SPEED_TEST_CONCURRENCY=3
   prompt_speed_test_settings
   if [[ "${IP_VERSION}" == "4" ]]; then SOURCE="https://www.cloudflare.com/ips-v4"; else SOURCE="https://www.cloudflare.com/ips-v6"; fi
@@ -290,7 +330,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 12,
+  "config_version": 13,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -335,6 +375,14 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "auto_update_enabled": false,
     "repository": "Jk-z-Box/cfnat-linux"
   },
+  "web": {
+    "enabled": ${WEB_BOOL},
+    "listen": "${WEB_LISTEN}"
+  },
+  "shodan": {
+    "enabled": ${SHODAN_BOOL},
+    "data_dir": "/var/lib/cfnat/shodan"
+  },
   "cloudflare_dns": {
     "enabled": ${DNS_BOOL},
     "zone_id": "${ZONE_ID}",
@@ -352,11 +400,14 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
 EOF
   printf 'CF_API_TOKEN=%q\n' "${TOKEN}" > "${CONFIG_DIR}/cfnat.env"
   chown root:cfnat "${CONFIG_DIR}/config.json" "${CONFIG_DIR}/cfnat.env"
-  chmod 0640 "${CONFIG_DIR}/config.json" "${CONFIG_DIR}/cfnat.env"
+  chmod 0660 "${CONFIG_DIR}/config.json"
+  chmod 0640 "${CONFIG_DIR}/cfnat.env"
 else
   info "保留已有配置 ${CONFIG_DIR}/config.json"
   cp -p "${CONFIG_DIR}/config.json" "${CONFIG_DIR}/config.json.bak"
   "${INSTALL_BIN}" -config "${CONFIG_DIR}/config.json" migrate-config
+  chown root:cfnat "${CONFIG_DIR}/config.json"
+  chmod 0660 "${CONFIG_DIR}/config.json"
   [[ -f "${CONFIG_DIR}/cfnat.env" ]] || { touch "${CONFIG_DIR}/cfnat.env"; chown root:cfnat "${CONFIG_DIR}/cfnat.env"; chmod 0640 "${CONFIG_DIR}/cfnat.env"; }
 fi
 
@@ -387,7 +438,7 @@ RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-ReadWritePaths=/var/lib/cfnat
+ReadWritePaths=/var/lib/cfnat /etc/cfnat
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 

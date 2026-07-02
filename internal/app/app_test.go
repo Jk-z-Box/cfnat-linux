@@ -49,7 +49,7 @@ func TestDNSLatencySyncPolicy(t *testing.T) {
 	cfg.DNS.RecordType = "A"
 	cfg.DNS.SyncCount = 1
 	cfg.DNS.LatencySyncEnabled = false
-	app := New(cfg, nil, nil, "v0.9.0")
+	app := New(cfg, nil, nil, "v0.9.0", "")
 	now := time.Now().UTC()
 	app.state.DNS.Synced = true
 	app.state.DNS.LastSyncedAt = &now

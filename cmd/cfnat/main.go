@@ -110,7 +110,7 @@ func run() int {
 		return 2
 	}
 
-	if err := app.New(cfg, logger, s, version).Run(ctx); err != nil {
+	if err := app.New(cfg, logger, s, version, *configPath).Run(ctx); err != nil {
 		logger.Error("服务退出", "error", err)
 		return 1
 	}

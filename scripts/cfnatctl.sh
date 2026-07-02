@@ -299,6 +299,39 @@ edit_update_check_interval() {
   done
 }
 
+toggle_web_panel() {
+  local value
+  while true; do
+    read -r -p "启用 Web 管理面板？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config web_enabled true && return ;;
+      n|N|no|NO|No) set_config web_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+edit_web_listen() {
+  local value
+  while true; do
+    read -r -p "Web 管理面板监听地址（例如 0.0.0.0:8787 或 [::]:8787）: " value
+    if set_config web_listen "${value}"; then return; fi
+    echo "输入格式错误，请重新输入。" >&2
+  done
+}
+
+toggle_shodan_panel() {
+  local value
+  while true; do
+    read -r -p "启用 Shodan IP Panel？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config shodan_enabled true && return ;;
+      n|N|no|NO|No) set_config shodan_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
 update_auto_enabled() {
   awk '
     /"update"[[:space:]]*:/ {inside=1}
@@ -422,7 +455,10 @@ config_menu() {
     echo " 17) 定时检查更新开关"
     echo " 18) 后台自动更新开关"
     echo " 19) 检查更新间隔"
-    echo " 20) 使用编辑器修改完整配置"
+    echo " 20) Web 管理面板开关"
+    echo " 21) Web 管理面板监听地址"
+    echo " 22) Shodan IP Panel 开关"
+    echo " 23) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -445,7 +481,10 @@ config_menu() {
       17) toggle_update_check; pause_screen ;;
       18) toggle_auto_update; pause_screen ;;
       19) edit_update_check_interval; pause_screen ;;
-      20)
+      20) toggle_web_panel; pause_screen ;;
+      21) edit_web_listen; pause_screen ;;
+      22) toggle_shodan_panel; pause_screen ;;
+      23)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"
