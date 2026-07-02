@@ -54,13 +54,18 @@ type Status struct {
 }
 
 type Manager struct {
-	cfg    config.ShodanConfig
-	mu     sync.Mutex
-	client *http.Client
+	cfg      config.ShodanConfig
+	mu       sync.Mutex
+	client   *http.Client
+	onChange func()
 }
 
 func New(cfg config.ShodanConfig) *Manager {
 	return &Manager{cfg: cfg, client: &http.Client{Timeout: 60 * time.Second}}
+}
+
+func (m *Manager) SetOnChange(fn func()) {
+	m.onChange = fn
 }
 
 func (m *Manager) Enabled() bool { return m.cfg.Enabled }
@@ -358,6 +363,9 @@ func (m *Manager) setStatus(s Status) {
 		s.State = "idle"
 	}
 	_ = m.writeJSON(m.statusPath(), s)
+	if m.onChange != nil {
+		m.onChange()
+	}
 }
 
 func (m *Manager) writeJSON(path string, value any) error {

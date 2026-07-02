@@ -87,6 +87,9 @@ type App struct {
 	version    string
 	configPath string
 	mu         sync.Mutex
+	eventMu    sync.Mutex
+	eventCond  *sync.Cond
+	eventSeq   uint64
 	pool       []scanner.Result
 	failures   map[netip.Addr]int
 	state      RuntimeState
@@ -111,7 +114,7 @@ func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version, co
 		state.Update.AutoUpdateEnabled = cfg.Update.AutoUpdateEnabled
 		state.Update.CurrentVersion = version
 	}
-	return &App{
+	app := &App{
 		cfg: cfg, logger: logger, scanner: s,
 		proxy:      proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
 		dns:        cloudflare.New(cfg.DNS),
@@ -120,6 +123,8 @@ func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version, co
 		failures:   make(map[netip.Addr]int),
 		state:      state,
 	}
+	app.eventCond = sync.NewCond(&app.eventMu)
+	return app
 }
 
 func (a *App) Run(ctx context.Context) error {
@@ -575,6 +580,38 @@ func (a *App) saveState() {
 	if err := writeState(a.cfg.StateFile, data); err != nil {
 		a.logger.Warn("状态文件保存失败", "error", err)
 	}
+	a.broadcastState()
+}
+
+func (a *App) broadcastState() {
+	a.eventMu.Lock()
+	a.eventSeq++
+	a.eventCond.Broadcast()
+	a.eventMu.Unlock()
+}
+
+func (a *App) waitStateChange(ctx context.Context, last uint64) uint64 {
+	a.eventMu.Lock()
+	defer a.eventMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			a.eventCond.Broadcast()
+		case <-done:
+		}
+	}()
+	defer close(done)
+	for a.eventSeq == last && ctx.Err() == nil {
+		a.eventCond.Wait()
+	}
+	return a.eventSeq
+}
+
+func (a *App) stateSequence() uint64 {
+	a.eventMu.Lock()
+	defer a.eventMu.Unlock()
+	return a.eventSeq
 }
 
 func writeState(path string, data []byte) error {

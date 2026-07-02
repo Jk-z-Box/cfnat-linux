@@ -27,6 +27,7 @@ type webServer struct {
 
 func (a *App) serveWeb(ctx context.Context) error {
 	ws := &webServer{app: a, shodan: shodan.New(a.cfg.Shodan)}
+	ws.shodan.SetOnChange(a.broadcastState)
 	ws.tmpl = template.Must(template.New("panel").Funcs(template.FuncMap{
 		"join": strings.Join,
 	}).Parse(panelHTML))
@@ -35,6 +36,7 @@ func (a *App) serveWeb(ctx context.Context) error {
 	mux.HandleFunc("/login", ws.handleLogin)
 	mux.HandleFunc("/logout", ws.handleLogout)
 	mux.HandleFunc("/api/status", ws.requireAuth(ws.handleAPIStatus))
+	mux.HandleFunc("/events", ws.requireAuth(ws.handleEvents))
 	mux.HandleFunc("/cfnat/scan", ws.requireAuth(ws.handleCFNatScan))
 	mux.HandleFunc("/cfnat/config", ws.requireAuth(ws.handleCFNatConfig))
 	mux.HandleFunc("/shodan/save", ws.requireAuth(ws.handleShodanSave))
@@ -134,13 +136,44 @@ func (w *webServer) handleCFNatScan(rw http.ResponseWriter, r *http.Request) {
 }
 
 func (w *webServer) handleAPIStatus(rw http.ResponseWriter, r *http.Request) {
-	summary, cfnatText, shodanSummary := w.statusSnapshot()
+	payload := w.statusPayload()
 	rw.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(rw).Encode(map[string]any{
-		"summary": summary,
-		"cfnat":   cfnatText,
-		"shodan":  shodanSummary,
-	})
+	_ = json.NewEncoder(rw).Encode(payload)
+}
+
+func (w *webServer) handleEvents(rw http.ResponseWriter, r *http.Request) {
+	flusher, ok := rw.(http.Flusher)
+	if !ok {
+		http.Error(rw, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	rw.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	rw.Header().Set("Cache-Control", "no-cache")
+	rw.Header().Set("Connection", "keep-alive")
+	send := func() bool {
+		data, err := json.Marshal(w.statusPayload())
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(rw, "event: status\ndata: %s\n\n", data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !send() {
+		return
+	}
+	seq := w.app.stateSequence()
+	for r.Context().Err() == nil {
+		seq = w.app.waitStateChange(r.Context(), seq)
+		if r.Context().Err() != nil {
+			return
+		}
+		if !send() {
+			return
+		}
+	}
 }
 
 func (w *webServer) handleCFNatConfig(rw http.ResponseWriter, r *http.Request) {
@@ -180,6 +213,7 @@ func (w *webServer) handleCFNatConfig(rw http.ResponseWriter, r *http.Request) {
 	if cfg, err := config.Load(w.app.configPath); err == nil {
 		w.app.cfg = cfg
 	}
+	w.app.broadcastState()
 	w.redirect(rw, "配置已保存。监听地址、Web 开关、Shodan 开关等项目需要重启 cfnat 服务后完全生效。")
 }
 
@@ -199,13 +233,14 @@ func (w *webServer) handleShodanSave(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, "Shodan 配置保存失败："+err.Error())
 		return
 	}
+	w.app.broadcastState()
 	w.redirect(rw, "Shodan 当前配置已保存。")
 }
 
 func (w *webServer) handleShodanFetch(rw http.ResponseWriter, r *http.Request) {
 	if w.app.cfg.Shodan.Enabled {
 		w.shodan.FetchAsync(context.Background())
-		w.redirect(rw, "已开始获取 Shodan IP，稍后刷新查看状态。")
+		w.redirect(rw, "已开始获取 Shodan IP，状态会在页面中实时更新。")
 		return
 	}
 	w.redirect(rw, "Shodan IP Panel 未启用。")
@@ -216,6 +251,7 @@ func (w *webServer) handleShodanToggleDownload(rw http.ResponseWriter, r *http.R
 		w.render(rw, "下载开关切换失败："+err.Error())
 		return
 	}
+	w.app.broadcastState()
 	w.redirect(rw, "Shodan 下载链接状态已切换。")
 }
 
@@ -225,6 +261,7 @@ func (w *webServer) handleShodanSwitch(rw http.ResponseWriter, r *http.Request) 
 		w.render(rw, "切换失败："+err.Error())
 		return
 	}
+	w.app.broadcastState()
 	w.redirect(rw, "已切换 Shodan 配置。")
 }
 
@@ -234,6 +271,7 @@ func (w *webServer) handleShodanNew(rw http.ResponseWriter, r *http.Request) {
 		w.render(rw, "新增配置失败："+err.Error())
 		return
 	}
+	w.app.broadcastState()
 	w.redirect(rw, "已新增 Shodan 配置。")
 }
 
@@ -242,6 +280,7 @@ func (w *webServer) handleShodanDelete(rw http.ResponseWriter, r *http.Request) 
 		w.render(rw, "删除配置失败："+err.Error())
 		return
 	}
+	w.app.broadcastState()
 	w.redirect(rw, "已删除 Shodan 当前配置。")
 }
 
@@ -275,7 +314,7 @@ func (w *webServer) renderLogin(rw http.ResponseWriter, msg string) {
 
 func (w *webServer) render(rw http.ResponseWriter, msg string) {
 	cfg := w.app.cfg
-	summary, statusText, shodanSummary := w.statusSnapshot()
+	payload := w.statusPayload()
 	var shodanCfg shodan.StoreConfig
 	var shodanProfile shodan.Profile
 	var shodanStatus shodan.Status
@@ -290,10 +329,8 @@ func (w *webServer) render(rw http.ResponseWriter, msg string) {
 	data := map[string]any{
 		"CSS":           template.CSS(css),
 		"Message":       msg,
-		"Summary":       summary,
-		"ShodanSummary": shodanSummary,
+		"Payload":       payload,
 		"Config":        cfg,
-		"StatusText":    statusText,
 		"MaxLatencyMS":  cfg.MaxLatency.Value().Milliseconds(),
 		"LatencySecs":   int(cfg.LatencyMonitorInterval.Value().Seconds()),
 		"ShodanConfig":  shodanCfg,
@@ -308,7 +345,7 @@ func (w *webServer) render(rw http.ResponseWriter, msg string) {
 	}
 }
 
-func (w *webServer) statusSnapshot() (map[string]string, string, map[string]string) {
+func (w *webServer) statusPayload() map[string]any {
 	cfg := w.app.cfg
 	var status bytes.Buffer
 	PrintStatus(&status, cfg)
@@ -328,7 +365,18 @@ func (w *webServer) statusSnapshot() (map[string]string, string, map[string]stri
 		shodanSummary["profile"] = st.ActiveProfile
 		shodanSummary["error"] = st.LastError
 	}
-	return summary, status.String(), shodanSummary
+	return map[string]any{
+		"summary": summary,
+		"cfnat": map[string]any{
+			"text":       status.String(),
+			"status":     statusText(state.Status),
+			"scan":       scanSummary(state.Scan),
+			"primary_ip": valueOr(state.PrimaryIP, "暂无"),
+			"dns":        dnsSummary(cfg, state),
+			"targets":    len(state.Targets),
+		},
+		"shodan": shodanSummary,
+	}
 }
 
 func scanSummary(scan ScanState) string {
@@ -387,29 +435,30 @@ func boolText(v bool) string {
 }
 
 const css = `
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f6f7f9;color:#17202a}main{max-width:1180px;margin:0 auto;padding:24px 16px 48px}.login{max-width:420px;margin-top:12vh;background:white;border:1px solid #dde2e8;border-radius:10px}h1{margin:0 0 16px}.nav{display:flex;justify-content:space-between;align-items:center}section{background:white;border:1px solid #dde2e8;border-radius:10px;padding:18px;margin:14px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.card{background:#f9fafb;border:1px solid #e6ebf0;border-radius:8px;padding:12px}.card b{display:block;color:#657386;font-size:13px;margin-bottom:6px}.value{font-size:20px;font-weight:700}label{display:block;font-weight:600;margin:10px 0 6px}input,textarea,select{width:100%;box-sizing:border-box;border:1px solid #cfd7df;border-radius:7px;padding:9px;font-size:14px}textarea{min-height:74px}button,.button{border:0;border-radius:7px;background:#1769e0;color:white;padding:10px 14px;cursor:pointer;text-decoration:none;display:inline-block}.secondary{background:#566574}.danger{background:#c7362f}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}.msg{background:#edf7ed;border:1px solid #b9dfbc;padding:10px;border-radius:7px;margin:12px 0}pre{white-space:pre-wrap;background:#eef2f6;border-radius:7px;padding:12px;overflow:auto}.hint{color:#657386;font-size:13px}details{border:1px solid #e1e6ec;border-radius:8px;padding:10px 12px;margin:12px 0;background:#fbfcfd}summary{cursor:pointer;font-weight:700}.danger-zone{border-color:#f0c6c3;background:#fff8f7}.muted{color:#657386}.split{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:900px){.split{grid-template-columns:1fr 1fr}}
+:root{--bg:#f4f7fb;--panel:#fff;--line:#dfe7f0;--text:#17202a;--muted:#66758a;--blue:#1769e0;--green:#168047;--red:#c7362f;--amber:#a86b00;--shadow:0 10px 28px rgba(20,35,60,.08)}*{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:linear-gradient(180deg,#edf4ff 0,#f7f8fb 260px);color:var(--text)}main{max-width:1180px;margin:0 auto;padding:22px 16px 48px}.login{max-width:430px;margin-top:12vh;background:var(--panel);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:24px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px}.brand h1{margin:0;font-size:26px}.brand p{margin:5px 0 0;color:var(--muted)}a{color:var(--blue)}section,.panel{background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:18px;margin:14px 0}.summary-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}.card{background:#f9fbfe;border:1px solid #e6edf5;border-radius:14px;padding:14px;min-width:0}.card b{display:block;color:var(--muted);font-size:12px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.03em}.value{font-size:20px;font-weight:760;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}.layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,.82fr);gap:14px;align-items:start}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}label{display:block;font-weight:650;margin:10px 0 6px}input,textarea,select{width:100%;border:1px solid #cfd9e5;border-radius:10px;padding:10px;font-size:14px;background:#fff}textarea{min-height:82px}button,.button{border:0;border-radius:10px;background:var(--blue);color:white;padding:10px 14px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;font-size:14px}.secondary{background:#59697b}.danger{background:var(--red)}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}.msg{background:#edf7ed;border:1px solid #b9dfbc;padding:10px;border-radius:10px;margin:12px 0}.hint,.muted{color:var(--muted);font-size:13px;line-height:1.45}pre{white-space:pre-wrap;background:#0f1724;color:#dce8ff;border-radius:14px;padding:14px;overflow:auto;font-size:13px;line-height:1.5}details{border:1px solid #e1e8f0;border-radius:14px;padding:11px 13px;margin:12px 0;background:#fbfcfe}summary{cursor:pointer;font-weight:760}.danger-zone{border-color:#f0c6c3;background:#fff8f7}.pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 9px;background:#eef4ff;color:#31527c;font-size:12px}.live-dot{width:8px;height:8px;border-radius:50%;background:#15b76a;box-shadow:0 0 0 5px rgba(21,183,106,.13)}.section-title{display:flex;align-items:center;justify-content:space-between;gap:10px}.mini-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}@media(max-width:980px){.summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.layout{grid-template-columns:1fr}}@media(max-width:620px){main{padding:14px 10px 36px}.topbar{align-items:flex-start}.brand h1{font-size:22px}.summary-grid,.grid,.mini-grid{grid-template-columns:1fr}.value{font-size:18px}section,.panel{border-radius:14px;padding:14px}.actions{flex-direction:column}.actions button,.actions .button{width:100%}}
 `
 
 const panelHTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>cfnat Web 管理面板</title><style>{{.CSS}}</style></head><body><main>
-<div class="nav"><h1>cfnat-linux Web 管理面板</h1><a href="/logout">登出</a></div>
+<div class="topbar"><div class="brand"><h1>cfnat-linux 控制台</h1><p>统一管理 cfnat 与 Shodan IP Panel</p></div><a class="pill" href="/logout">登出</a></div>
 {{if .Message}}<div class="msg">{{.Message}}</div>{{end}}
-<section><h2>統一狀態摘要 <span class="hint">每 2 秒自動更新</span></h2><div class="grid">
-<div class="card"><b>cfnat</b><div class="value" id="sum-cfnat">{{index .Summary "cfnat"}}</div></div>
-<div class="card"><b>掃描</b><div class="value" id="sum-scan">{{index .Summary "scan"}}</div></div>
-<div class="card"><b>目前最優 IP</b><div class="value" id="sum-primary">{{index .Summary "primary_ip"}}</div></div>
-<div class="card"><b>DNS</b><div class="value" id="sum-dns">{{index .Summary "dns"}}</div></div>
-<div class="card"><b>版本更新</b><div class="value" id="sum-update">{{index .Summary "update"}}</div></div>
-<div class="card"><b>Shodan</b><div class="value" id="sum-shodan-state">{{index .ShodanSummary "state"}}</div><div class="muted">IP: <span id="sum-shodan-ips">{{index .ShodanSummary "ips"}}</span></div></div>
-</div><div id="sum-shodan-error" class="hint">{{index .ShodanSummary "error"}}</div></section>
-<section><h2>cfnat 狀態</h2><pre id="cfnat-status">{{.StatusText}}</pre><div class="actions"><form method="post" action="/cfnat/scan"><button>立即重新掃描</button></form></div></section>
-<section><h2>cfnat 配置</h2><form method="post" action="/cfnat/config"><div class="grid"><div><label>最大優選延遲 ms</label><input name="max_latency" type="number" value="{{.MaxLatencyMS}}"></div><div><label>最小健康 IP 數</label><input name="min_healthy_count" type="number" value="{{.Config.MinHealthyCount}}"></div><div><label>延遲監控間隔 秒</label><input name="latency_monitor_interval" type="number" value="{{.LatencySecs}}"></div><div><label>下載測速最低 MB/s</label><input name="speed_test_min_mbps" value="{{.Config.SpeedTest.MinMBps}}"></div><div><label>下載測速並發</label><input name="speed_test_concurrency" type="number" value="{{.Config.SpeedTest.Concurrency}}"></div></div>
-<label><input style="width:auto" type="checkbox" name="speed_test_enabled" {{if .Config.SpeedTest.Enabled}}checked{{end}}> 啟用下載測速</label>
-<details><summary>敏感與高風險 cfnat 設置（點擊展開）</summary><div class="grid"><div><label>Web 監聽</label><input name="web_listen" value="{{.Config.Web.Listen}}"></div><div><label>Web 用户名</label><input name="web_username" value="{{.Config.Web.Username}}" autocomplete="username"></div><div><label>Web 新密码</label><input name="web_password" type="password" autocomplete="new-password" placeholder="留空不修改"></div><div><label>Cloudflare Zone ID</label><input name="zone_id" value="{{.Config.DNS.ZoneID}}"></div><div><label>DNS 解析域名</label><input name="record_name" value="{{.Config.DNS.RecordName}}"></div></div><label><input style="width:auto" type="checkbox" name="dns_enabled" {{if .Config.DNS.Enabled}}checked{{end}}> 啟用 Cloudflare DNS 同步</label><label><input style="width:auto" type="checkbox" name="web_enabled" {{if .Config.Web.Enabled}}checked{{end}}> 啟用 Web 管理面板</label><label><input style="width:auto" type="checkbox" name="shodan_enabled" {{if .Config.Shodan.Enabled}}checked{{end}}> 啟用 Shodan IP Panel</label><p class="hint">Web 帳密與 SSH 菜單管理密碼互不干涉。修改 Web 監聽、Web 開關或 Shodan 開關後需重啟 cfnat 服務。</p></details>
-<div class="actions"><button>保存 cfnat 配置</button></div></form></section>
-<section><h2>Shodan IP Panel</h2>{{if not .Config.Shodan.Enabled}}<p>Shodan IP Panel 未啟用。可在 cfnat 敏感設置中勾選後保存，然後重啟 cfnat 服務。</p>{{else}}{{if .ShodanError}}<div class="msg">{{.ShodanError}}</div>{{end}}<div class="grid"><div class="card"><b>任務狀態</b><div class="value" id="shodan-state">{{.ShodanStatus.State}}</div></div><div class="card"><b>目前配置</b>{{.ShodanConfig.ActiveProfile}}</div><div class="card"><b>API Key</b>{{.ShodanMaskKey}}</div><div class="card"><b>已寫入 IP</b><span id="shodan-ips">{{.ShodanStatus.UniqueIPsWritten}}</span></div><div class="card"><b>最近成功</b>{{.ShodanStatus.LastSuccessAt}}</div></div>{{if .ShodanStatus.LastError}}<pre>{{.ShodanStatus.LastError}}</pre>{{end}}<p>目前查詢語法</p><pre>{{.ShodanQuery}}</pre><div class="actions"><form method="post" action="/shodan/fetch"><button>獲取最新數據</button></form><form method="post" action="/shodan/toggle-download"><button class="secondary">切換下載連結</button></form>{{if .ShodanProfile.DownloadEnabled}}<a class="button" href="/shodan/download/{{.ShodanConfig.ActiveProfile}}.txt">下載目前配置 IP</a>{{end}}</div>
-<details><summary>Shodan 配置管理（點擊展開）</summary><form method="post" action="/shodan/switch"><select name="profile_name">{{range $name, $_ := .ShodanConfig.Profiles}}<option value="{{$name}}" {{if eq $.ShodanConfig.ActiveProfile $name}}selected{{end}}>{{$name}}</option>{{end}}</select><div class="actions"><button class="secondary">切換配置</button></div></form><form method="post" action="/shodan/new"><label>新增配置名</label><input name="profile_name" placeholder="sg-aws-cloudflare"><div class="actions"><button class="secondary">新增配置</button></div></form><form method="post" action="/shodan/delete"><div class="actions"><button class="danger">刪除目前配置</button></div></form></details>
-<details><summary>敏感 Shodan 設置（API Key / 查詢條件）</summary><form method="post" action="/shodan/save"><label>Shodan API Key</label><input name="api_key" value="{{.ShodanProfile.APIKey}}" autocomplete="off"><div class="grid"><div><label>Port</label><input name="ports" value="{{.ShodanProfile.Ports}}"></div><div><label>Country</label><input name="countries" value="{{.ShodanProfile.Countries}}"></div><div><label>ASN</label><input name="asns" value="{{.ShodanProfile.ASNs}}"></div><div><label>IP 獲取數量</label><input name="fetch_count" type="number" min="1" max="10000" value="{{.ShodanProfile.FetchCount}}"></div></div><label>Keyword</label><textarea name="keywords">{{.ShodanProfile.Keywords}}</textarea><label>Extra filters</label><textarea name="extra_filters">{{.ShodanProfile.ExtraFilters}}</textarea><label>Raw query</label><textarea name="raw_query">{{.ShodanProfile.RawQuery}}</textarea><div class="actions"><button>保存 Shodan 配置</button></div></form></details>{{end}}</section>
+<section><div class="section-title"><h2>实时状态总览</h2><span class="pill"><span class="live-dot"></span><span id="live-state">实时连接中</span></span></div><div class="summary-grid">
+<div class="card"><b>cfnat</b><div class="value" id="sum-cfnat">{{index (index .Payload "summary") "cfnat"}}</div></div>
+<div class="card"><b>扫描</b><div class="value" id="sum-scan">{{index (index .Payload "summary") "scan"}}</div></div>
+<div class="card"><b>最优 IP</b><div class="value" id="sum-primary">{{index (index .Payload "summary") "primary_ip"}}</div></div>
+<div class="card"><b>DNS</b><div class="value" id="sum-dns">{{index (index .Payload "summary") "dns"}}</div></div>
+<div class="card"><b>更新</b><div class="value" id="sum-update">{{index (index .Payload "summary") "update"}}</div></div>
+<div class="card"><b>Shodan</b><div class="value" id="sum-shodan-state">{{index (index .Payload "shodan") "state"}}</div><div class="muted">IP: <span id="sum-shodan-ips">{{index (index .Payload "shodan") "ips"}}</span></div></div>
+</div><p id="sum-shodan-error" class="hint">{{index (index .Payload "shodan") "error"}}</p><details><summary>查看完整运行状态明细</summary><pre id="cfnat-status">{{index (index .Payload "cfnat") "text"}}</pre></details></section>
+<div class="layout"><div>
+<section><div class="section-title"><h2>cfnat 操作</h2><span class="hint">低风险常用操作</span></div><div class="actions"><form method="post" action="/cfnat/scan"><button>立即重新扫描</button></form></div></section>
+<section><h2>cfnat 常用配置</h2><form method="post" action="/cfnat/config"><div class="grid"><div><label>最大优选延迟 ms</label><input name="max_latency" type="number" value="{{.MaxLatencyMS}}"></div><div><label>最小健康 IP 数</label><input name="min_healthy_count" type="number" value="{{.Config.MinHealthyCount}}"></div><div><label>延迟监控间隔 秒</label><input name="latency_monitor_interval" type="number" value="{{.LatencySecs}}"></div><div><label>下载测速最低 MB/s</label><input name="speed_test_min_mbps" value="{{.Config.SpeedTest.MinMBps}}"></div><div><label>下载测速并发</label><input name="speed_test_concurrency" type="number" value="{{.Config.SpeedTest.Concurrency}}"></div></div><label><input style="width:auto" type="checkbox" name="speed_test_enabled" {{if .Config.SpeedTest.Enabled}}checked{{end}}> 启用下载测速</label><details><summary>敏感与高风险设置</summary><div class="grid"><div><label>Web 监听</label><input name="web_listen" value="{{.Config.Web.Listen}}"></div><div><label>Web 用户名</label><input name="web_username" value="{{.Config.Web.Username}}" autocomplete="username"></div><div><label>Web 新密码</label><input name="web_password" type="password" autocomplete="new-password" placeholder="留空不修改"></div><div><label>Cloudflare Zone ID</label><input name="zone_id" value="{{.Config.DNS.ZoneID}}"></div><div><label>DNS 解析域名</label><input name="record_name" value="{{.Config.DNS.RecordName}}"></div></div><label><input style="width:auto" type="checkbox" name="dns_enabled" {{if .Config.DNS.Enabled}}checked{{end}}> 启用 Cloudflare DNS 同步</label><label><input style="width:auto" type="checkbox" name="web_enabled" {{if .Config.Web.Enabled}}checked{{end}}> 启用 Web 管理面板</label><label><input style="width:auto" type="checkbox" name="shodan_enabled" {{if .Config.Shodan.Enabled}}checked{{end}}> 启用 Shodan IP Panel</label><p class="hint">Web 帐密与 SSH 菜单管理密码互不干涉。修改 Web 监听、Web 开关或 Shodan 开关后需重启 cfnat 服务。</p></details><div class="actions"><button>保存 cfnat 配置</button></div></form></section>
+</div><div>
+<section><div class="section-title"><h2>Shodan IP Panel</h2><span class="hint">查询与结果下载</span></div>{{if not .Config.Shodan.Enabled}}<p>Shodan IP Panel 未启用。可在敏感设置中勾选后保存，重启 cfnat 服务生效。</p>{{else}}{{if .ShodanError}}<div class="msg">{{.ShodanError}}</div>{{end}}<div class="mini-grid"><div class="card"><b>当前配置</b>{{.ShodanConfig.ActiveProfile}}</div><div class="card"><b>API Key</b>{{.ShodanMaskKey}}</div><div class="card"><b>最近成功</b>{{.ShodanStatus.LastSuccessAt}}</div></div><p>当前查询语法</p><pre>{{.ShodanQuery}}</pre><div class="actions"><form method="post" action="/shodan/fetch"><button>获取最新数据</button></form><form method="post" action="/shodan/toggle-download"><button class="secondary">切换下载链接</button></form>{{if .ShodanProfile.DownloadEnabled}}<a class="button" href="/shodan/download/{{.ShodanConfig.ActiveProfile}}.txt">下载当前配置 IP</a>{{end}}</div><details><summary>Shodan 配置管理</summary><form method="post" action="/shodan/switch"><select name="profile_name">{{range $name, $_ := .ShodanConfig.Profiles}}<option value="{{$name}}" {{if eq $.ShodanConfig.ActiveProfile $name}}selected{{end}}>{{$name}}</option>{{end}}</select><div class="actions"><button class="secondary">切换配置</button></div></form><form method="post" action="/shodan/new"><label>新增配置名</label><input name="profile_name" placeholder="sg-aws-cloudflare"><div class="actions"><button class="secondary">新增配置</button></div></form><form method="post" action="/shodan/delete"><div class="actions"><button class="danger">删除当前配置</button></div></form></details><details><summary>敏感 Shodan 设置（API Key / 查询条件）</summary><form method="post" action="/shodan/save"><label>Shodan API Key</label><input name="api_key" value="{{.ShodanProfile.APIKey}}" autocomplete="off"><div class="grid"><div><label>Port</label><input name="ports" value="{{.ShodanProfile.Ports}}"></div><div><label>Country</label><input name="countries" value="{{.ShodanProfile.Countries}}"></div><div><label>ASN</label><input name="asns" value="{{.ShodanProfile.ASNs}}"></div><div><label>IP 获取数量</label><input name="fetch_count" type="number" min="1" max="10000" value="{{.ShodanProfile.FetchCount}}"></div></div><label>Keyword</label><textarea name="keywords">{{.ShodanProfile.Keywords}}</textarea><label>Extra filters</label><textarea name="extra_filters">{{.ShodanProfile.ExtraFilters}}</textarea><label>Raw query</label><textarea name="raw_query">{{.ShodanProfile.RawQuery}}</textarea><div class="actions"><button>保存 Shodan 配置</button></div></form></details>{{end}}</section>
+</div></div>
 <script>
-async function refreshStatus(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)return;const d=await r.json();const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v||''};set('sum-cfnat',d.summary.cfnat);set('sum-scan',d.summary.scan);set('sum-primary',d.summary.primary_ip);set('sum-dns',d.summary.dns);set('sum-update',d.summary.update);set('sum-shodan-state',d.shodan.state);set('sum-shodan-ips',d.shodan.ips);set('sum-shodan-error',d.shodan.error);set('cfnat-status',d.cfnat);set('shodan-state',d.shodan.state);set('shodan-ips',d.shodan.ips)}catch(e){}}
-setInterval(refreshStatus,2000);refreshStatus();
+function setText(id,v){const el=document.getElementById(id);if(el)el.textContent=v||''}
+function cls(id,v){const el=document.getElementById(id);if(!el)return;el.classList.remove('ok','warn','bad');const t=(v||'').toString();if(t.includes('运行')||t.includes('完成')||t.includes('同步')||t==='idle')el.classList.add('ok');else if(t.includes('错误')||t.includes('失败')||t.includes('异常')||t.includes('error'))el.classList.add('bad');else el.classList.add('warn')}
+function applyStatus(d){setText('sum-cfnat',d.summary.cfnat);setText('sum-scan',d.summary.scan);setText('sum-primary',d.summary.primary_ip);setText('sum-dns',d.summary.dns);setText('sum-update',d.summary.update);setText('sum-shodan-state',d.shodan.state);setText('sum-shodan-ips',d.shodan.ips);setText('sum-shodan-error',d.shodan.error);setText('cfnat-status',d.cfnat.text);['sum-cfnat','sum-scan','sum-dns','sum-update','sum-shodan-state'].forEach(id=>cls(id,document.getElementById(id)?.textContent))}
+function connectEvents(){const live=document.getElementById('live-state');const es=new EventSource('/events');es.onopen=()=>{if(live)live.textContent='实时已连接'};es.onerror=()=>{if(live)live.textContent='连接中断，正在重连'};es.addEventListener('status',ev=>{try{applyStatus(JSON.parse(ev.data))}catch(e){}})}
+connectEvents();
 </script></main></body></html>`
