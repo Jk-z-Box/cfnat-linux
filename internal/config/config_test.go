@@ -77,8 +77,8 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.Update.Repository != "Jk-z-Box/cfnat-linux" {
 		t.Fatalf("update repository = %q", cfg.Update.Repository)
 	}
-	if cfg.Web.Enabled {
-		t.Fatal("expected web panel to be disabled after migration")
+	if !cfg.Web.Enabled {
+		t.Fatal("expected web panel to be enabled after migration")
 	}
 	if cfg.Web.Listen != "0.0.0.0:8787" {
 		t.Fatalf("web listen = %q", cfg.Web.Listen)

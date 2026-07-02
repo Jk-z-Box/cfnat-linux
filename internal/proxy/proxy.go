@@ -19,11 +19,13 @@ type Server struct {
 	timeout    time.Duration
 	logger     *slog.Logger
 	pool       atomic.Value
+	enabled    atomic.Bool
 }
 
 func New(listen string, targetPort int, timeout time.Duration, logger *slog.Logger) *Server {
 	s := &Server{listen: listen, targetPort: targetPort, timeout: timeout, logger: logger}
 	s.pool.Store([]scanner.Result{})
+	s.enabled.Store(true)
 	return s
 }
 
@@ -31,6 +33,25 @@ func (s *Server) Update(results []scanner.Result) {
 	copyOf := append([]scanner.Result(nil), results...)
 	s.pool.Store(copyOf)
 	s.logger.Info("转发池已更新", "targets", len(copyOf))
+}
+
+func (s *Server) Enabled() bool {
+	return s.enabled.Load()
+}
+
+func (s *Server) SetEnabled(enabled bool) {
+	s.enabled.Store(enabled)
+	if enabled {
+		s.logger.Info("TCP 转发已恢复")
+	} else {
+		s.logger.Info("TCP 转发已暂停")
+	}
+}
+
+func (s *Server) Toggle() bool {
+	next := !s.enabled.Load()
+	s.SetEnabled(next)
+	return next
 }
 
 func (s *Server) Serve(ctx context.Context) error {
@@ -60,6 +81,9 @@ func (s *Server) Serve(ctx context.Context) error {
 
 func (s *Server) handle(ctx context.Context, client net.Conn) {
 	defer client.Close()
+	if !s.enabled.Load() {
+		return
+	}
 	pool := s.pool.Load().([]scanner.Result)
 	if len(pool) == 0 {
 		return

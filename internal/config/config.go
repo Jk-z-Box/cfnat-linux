@@ -119,7 +119,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          14,
+		ConfigVersion:          15,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -156,7 +156,7 @@ func Defaults() Config {
 			CheckEnabled: true, CheckInterval: Duration(6 * time.Hour), AutoUpdateEnabled: false,
 			Repository: "Jk-z-Box/cfnat-linux",
 		},
-		Web:    WebConfig{Enabled: false, Listen: "0.0.0.0:8787", Username: "admin", PasswordSHA256: "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"},
+		Web:    WebConfig{Enabled: true, Listen: "0.0.0.0:8787", Username: "admin", PasswordSHA256: "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"},
 		Shodan: ShodanConfig{Enabled: false, DataDir: "/var/lib/cfnat/shodan"},
 	}
 }
@@ -263,7 +263,7 @@ func Migrate(path string) (bool, error) {
 		}
 	}
 	if _, ok := raw["web"]; !ok {
-		raw["web"] = map[string]any{"enabled": false, "listen": "0.0.0.0:8787", "username": "admin", "password_sha256": "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"}
+		raw["web"] = map[string]any{"enabled": true, "listen": "0.0.0.0:8787", "username": "admin", "password_sha256": "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"}
 		changed = true
 	} else if web, ok := raw["web"].(map[string]any); ok {
 		if _, ok := web["username"]; !ok {
@@ -279,8 +279,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 14 {
-		raw["config_version"] = 14
+	if version, _ := raw["config_version"].(float64); int(version) < 15 {
+		raw["config_version"] = 15
 		changed = true
 	}
 	if !changed {

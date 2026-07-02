@@ -22,10 +22,11 @@
 - 顯示當日掃描/重選觸發次數，方便觀察是否頻繁重掃。
 - 管理面板可選啟用管理密碼，支援開關與修改；配置只保存 SHA-256 雜湊，不保存明文。
 - 定時檢查 GitHub Release；有新版本時顯示在狀態面板，並可選擇啟用 systemd timer 背景自動更新。
-- 可選啟用 Web 管理面板，透過瀏覽器查看 cfnat 與 Shodan 統一狀態摘要、保存常用配置、觸發重掃；狀態透過 Server-Sent Events 實時推送，不依賴定時輪詢。
+- Web 管理面板新安裝時預設啟用，透過瀏覽器查看 cfnat 與 Shodan 統一狀態摘要、保存常用配置、暫停/恢復 TCP 轉發、觸發重掃；狀態透過 Server-Sent Events 實時推送，不依賴定時輪詢。
 - Web 面板使用獨立的用戶名與密碼，與 SSH 菜單管理密碼互不干涉；敏感設定預設折疊，避免誤觸。
+- Web 介面預設繁體中文，右上角可切換繁體中文、簡體中文或英文，登出按鈕與語言切換集中放置。
 - 內建 Shodan IP Panel：支援多配置、Shodan API 查詢、IP 結果保存與下載連結開關。
-- Shodan 區塊採用折疊式配置目錄，新增配置會以彈窗方式填寫，配置狀態、下載、修改和刪除集中管理。
+- Shodan 區塊採用折疊式配置目錄，新增配置會以彈窗方式填寫，刪除配置按鈕放在新增配置旁，配置狀態、下載和修改設定預設折疊管理。
 - Shodan 配置狀態按目前選中的 profile 顯示，切換到新配置時不會沿用其他配置的成功時間或 IP 數量。
 - 支援 Linux amd64、arm64 和 386。
 
@@ -44,7 +45,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.15.0.tar.gz
+tar -xzf cfnat-linux-v0.16.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -56,7 +57,7 @@ sudo ./scripts/install.sh
 - 最大允許延遲（毫秒）；
 - 健康 IP 少於幾個時觸發整池重選；
 - 延遲監控間隔（秒）；
-- 是否啟用 Web 管理面板與監聽地址；
+- Web 管理面板監聽地址、登入用戶名和密碼；新安裝預設啟用 Web；
 - 是否啟用 Shodan IP Panel；
 - 是否啟用下載測速篩選、最低下載速度、單 IP 測速時間、最多測速候選數和測速並發數；
 - 可選 Cloudflare 資料中心；
@@ -94,25 +95,27 @@ sudo cfnatctl
 
 ## Web 管理面板與 Shodan IP Panel
 
-Web 面板可在安裝精靈或 `sudo cfnatctl` → 修改配置 中啟用，預設監聽地址為：
+Web 面板新安裝時預設啟用，安裝精靈會要求設定 Web 監聽地址、登入用戶名和密碼。預設監聽地址為：
 
 ```text
 0.0.0.0:8787
 ```
 
-Web 面板使用獨立的 `web.username` 和 `web.password_sha256` 登入，與 SSH 菜單的管理密碼互不干涉。新安裝時如果啟用 Web，安裝精靈會要求設定 Web 用戶名和密碼；舊配置升級時會補入預設 `admin/admin`，建議升級後立即修改。
+Web 面板使用獨立的 `web.username` 和 `web.password_sha256` 登入，與 SSH 菜單的管理密碼互不干涉。舊配置如果缺少 Web 配置，升級遷移時會補入預設 `admin/admin`，建議升級後立即修改。
 
 Web 面板目前可管理：
 
 - 查看 cfnat 完整狀態；
 - 查看 cfnat 與 Shodan 的統一狀態摘要，頁面透過 SSE 長連線接收實時狀態推送，不需要手動刷新，也不依賴固定 N 秒輪詢；
+- 查看折疊式即時日誌摘要；
+- 暫停或恢復 TCP 轉發；Web 面板本身不會因此停止；
 - 觸發 cfnat 立即重新掃描；
 - 修改常用 cfnat 配置；
 - 折疊顯示 Cloudflare Zone ID、DNS 域名、Web 帳密、Shodan API Key 等敏感設定；
 - 啟用/停用 Shodan IP Panel；
 - 管理 Shodan 多配置、API Key、查詢條件、抓取數量；
 - 執行 Shodan 查詢並下載生成的 IP 檔案。
-- 透過右上角「新增配置」彈窗建立 Shodan 配置；配置狀態、下載開關、下載連結、修改配置和刪除配置都收納在折疊目錄中。
+- 透過右上角「新增配置」彈窗建立 Shodan 配置；刪除配置按鈕放在新增配置旁，配置狀態、下載開關、下載連結與修改配置收納在折疊目錄中。
 
 Web 面板運行在 cfnat 服務內，保持低權限執行。啟停服務、解除安裝、查看 journald 即時日誌和手動更新仍保留在 SSH 管理菜單中完成，避免 Web 面板持有 root 級 systemd 控制權限。
 
@@ -215,7 +218,7 @@ DNS 同步分為兩類：
 | `update.check_interval` | `6h` | 檢查更新週期 |
 | `update.auto_update_enabled` | `false` | 是否允許背景自動下載並安裝新版 |
 | `update.repository` | `Jk-z-Box/cfnat-linux` | 檢查更新使用的 GitHub 倉庫 |
-| `web.enabled` | `false` | 是否啟用 Web 管理面板 |
+| `web.enabled` | `true` | 是否啟用 Web 管理面板 |
 | `web.listen` | `0.0.0.0:8787` | Web 管理面板監聽地址 |
 | `web.username` | `admin` | Web 面板登入用戶名 |
 | `web.password_sha256` | `admin` 的 SHA-256 | Web 面板登入密碼雜湊，與 SSH 管理密碼分離 |
@@ -264,7 +267,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.15.0
+make release VERSION=v0.16.0
 ```
 
 ## 命令列
