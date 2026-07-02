@@ -20,7 +20,7 @@ release: clean
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o dist/cfnat-linux-amd64 ./cmd/cfnat
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o dist/cfnat-linux-arm64 ./cmd/cfnat
 	GOOS=linux GOARCH=386 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o dist/cfnat-linux-386 ./cmd/cfnat
+	cd dist && sha256sum cfnat-linux-* > SHA256SUMS
 
 clean:
 	rm -rf dist
-
