@@ -7,6 +7,8 @@ INSTALL_BIN="/usr/local/bin/cfnat"
 CONFIG_DIR="/etc/cfnat"
 STATE_DIR="/var/lib/cfnat"
 SERVICE_FILE="/etc/systemd/system/cfnat.service"
+UPDATE_SERVICE_FILE="/etc/systemd/system/cfnat-update.service"
+UPDATE_TIMER_FILE="/etc/systemd/system/cfnat-update.timer"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
@@ -288,7 +290,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 11,
+  "config_version": 12,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -326,6 +328,12 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "management": {
     "password_enabled": false,
     "password_sha256": ""
+  },
+  "update": {
+    "check_enabled": true,
+    "check_interval": "6h",
+    "auto_update_enabled": false,
+    "repository": "Jk-z-Box/cfnat-linux"
   },
   "cloudflare_dns": {
     "enabled": ${DNS_BOOL},
@@ -387,6 +395,31 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 EOF
 
+cat > "${UPDATE_SERVICE_FILE}" <<'EOF'
+[Unit]
+Description=cfnat-linux background updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cfnatctl update --auto
+EOF
+
+cat > "${UPDATE_TIMER_FILE}" <<'EOF'
+[Unit]
+Description=Run cfnat-linux background updater periodically
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=1h
+AccuracySec=5m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 install -d -o root -g root -m 0755 /usr/local/lib/cfnat
 install -m 0755 "${PROJECT_DIR}/scripts/cfnatctl.sh" /usr/local/bin/cfnatctl
 install -m 0755 "${PROJECT_DIR}/scripts/uninstall.sh" /usr/local/lib/cfnat/uninstall.sh
@@ -394,6 +427,7 @@ install -m 0755 "${PROJECT_DIR}/scripts/uninstall.sh" /usr/local/lib/cfnat/unins
 "${INSTALL_BIN}" -config "${CONFIG_DIR}/config.json" check-config
 systemctl daemon-reload
 systemctl enable cfnat
+systemctl enable --now cfnat-update.timer
 systemctl restart cfnat
 info "安装完成"
 echo "状态: cfnatctl status"

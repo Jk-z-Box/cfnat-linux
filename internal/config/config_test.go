@@ -68,6 +68,15 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.Management.PasswordEnabled {
 		t.Fatal("expected management password to be disabled after migration")
 	}
+	if !cfg.Update.CheckEnabled {
+		t.Fatal("expected update check to be enabled after migration")
+	}
+	if cfg.Update.AutoUpdateEnabled {
+		t.Fatal("expected auto update to be disabled after migration")
+	}
+	if cfg.Update.Repository != "Jk-z-Box/cfnat-linux" {
+		t.Fatalf("update repository = %q", cfg.Update.Repository)
+	}
 }
 
 func TestDNSRecordTypeAuto(t *testing.T) {
@@ -154,6 +163,14 @@ func TestRejectInvalidManagementPasswordHash(t *testing.T) {
 	cfg.Management.PasswordSHA256 = "not-a-sha256"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected management password hash validation error")
+	}
+}
+
+func TestRejectInvalidUpdateRepository(t *testing.T) {
+	cfg := Defaults()
+	cfg.Update.Repository = "not-owner-repo"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid update repository validation error")
 	}
 }
 

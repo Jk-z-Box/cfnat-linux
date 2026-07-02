@@ -21,6 +21,7 @@
 - 首次掃描無結果時保持背景執行並定期重試，不再進入 systemd 重啟循環。
 - 顯示當日掃描/重選觸發次數，方便觀察是否頻繁重掃。
 - 管理面板可選啟用管理密碼，支援開關與修改；配置只保存 SHA-256 雜湊，不保存明文。
+- 定時檢查 GitHub Release；有新版本時顯示在狀態面板，並可選擇啟用 systemd timer 背景自動更新。
 - 支援 Linux amd64、arm64 和 386。
 
 ## 工作流程
@@ -38,7 +39,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.9.0.tar.gz
+tar -xzf cfnat-linux-v0.10.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -77,14 +78,15 @@ sudo cfnatctl
 - 優選池每個 IP 的延遲、colo 和健康狀態；
 - Cloudflare DNS 是否啟用、是否同步成功、解析網域和同步 IP。
 - DNS 延遲排序同步是否啟用，以及冷卻時間。
+- 是否啟用定時檢查更新、背景自動更新，以及是否發現新版本。
 
-面板下方提供執行開關、立即重掃、診斷掃描、修改設定、即時日誌以及一鍵關閉並解除安裝。執行狀態同時儲存於 `/var/lib/cfnat/state.json`。
+面板下方提供執行開關、立即重掃、診斷掃描、立即檢查並更新、修改設定、即時日誌以及一鍵關閉並解除安裝。執行狀態同時儲存於 `/var/lib/cfnat/state.json`。
 
 可在 `sudo cfnatctl` → 修改配置 中啟用管理密碼。啟用後，進入管理面板、啟停服務、重啟掃描、修改配置和解除安裝都需要輸入管理密碼；`status`、`logs`、`check` 等只讀命令不需要密碼。密碼以 SHA-256 雜湊形式保存在 `/etc/cfnat/config.json`。
 
 掃描日誌會彙總失敗原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。這樣可以直接判斷是線路不可達、TLS/SNI、探測網址、延遲閾值還是機房篩選導致無結果。
 
-若啟用下載測速篩選，TCP 初篩完成後會優先取低延遲候選 IP 做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：先按 TCP 延遲篩出候選，再逐個下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續 TLS/HTTP 複篩。
+若啟用下載測速篩選，TCP 初篩完成後會優先取低延遲候選 IP 做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：先按 TCP 延遲篩出候選，再按 speed_test.concurrency 並發下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續 TLS/HTTP 複篩。
 
 也可以直接使用命令：
 
@@ -94,8 +96,19 @@ cfnatctl logs         # 即時日誌
 cfnatctl pool         # 目前優選池
 cfnatctl scan         # 重啟服務並立即重新優選
 cfnatctl config       # 進入設定修改選單
+cfnatctl update       # 立即檢查並安裝新版本
 cfnatctl restart      # 重啟服務
 cfnatctl uninstall    # 確認後關閉並解除安裝
+```
+
+## 更新機制
+
+服務會依 `update.check_interval` 定時查詢 GitHub 最新 Release，並把結果寫入 `/var/lib/cfnat/state.json`，所以 `cfnatctl status` 會顯示「已是最新」、「發現新版本」或「檢查失敗」。
+
+背景自動更新由 `cfnat-update.timer` 執行，預設會安裝 timer，但只有 `update.auto_update_enabled=true` 時才會真正下載新版 Release 包並執行安裝腳本。可在 `sudo cfnatctl` → 修改配置 中開關「定時檢查更新」和「背景自動更新」，也可以手動執行：
+
+```bash
+sudo cfnatctl update
 ```
 
 ## Cloudflare DNS 設定
@@ -160,6 +173,10 @@ DNS 同步分為兩類：
 | `speed_test.concurrency` | `3` | 下載測速並發數 |
 | `management.password_enabled` | `false` | 是否啟用 `cfnatctl` 管理密碼 |
 | `management.password_sha256` | `""` | 管理密碼 SHA-256 雜湊 |
+| `update.check_enabled` | `true` | 是否定時檢查 GitHub Release 更新 |
+| `update.check_interval` | `6h` | 檢查更新週期 |
+| `update.auto_update_enabled` | `false` | 是否允許背景自動下載並安裝新版 |
+| `update.repository` | `Jk-z-Box/cfnat-linux` | 檢查更新使用的 GitHub 倉庫 |
 | `cloudflare_dns.sync_count` | `1` | 同步排名前幾個 IP |
 | `cloudflare_dns.ttl` | `1` | Cloudflare API 中 `1` 表示自動 TTL |
 | `cloudflare_dns.latency_sync_enabled` | `false` | 是否允許 DNS 按延遲排序冷卻同步 |
@@ -203,7 +220,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.9.0
+make release VERSION=v0.10.0
 ```
 
 ## 命令列
@@ -211,6 +228,7 @@ make release VERSION=v0.9.0
 ```bash
 cfnat -config ./config.json check-config
 cfnat -config ./config.json migrate-config
+cfnat -config ./config.json check-update
 cfnat -config ./config.json scan
 cfnat -config ./config.json status
 cfnat -config ./config.json run

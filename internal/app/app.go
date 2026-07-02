@@ -17,6 +17,7 @@ import (
 	"github.com/cfnat-linux/cfnat-linux/internal/config"
 	"github.com/cfnat-linux/cfnat-linux/internal/proxy"
 	"github.com/cfnat-linux/cfnat-linux/internal/scanner"
+	updatecheck "github.com/cfnat-linux/cfnat-linux/internal/update"
 )
 
 type ScanState struct {
@@ -47,6 +48,18 @@ type DNSState struct {
 	LastError    string     `json:"last_error,omitempty"`
 }
 
+type UpdateState struct {
+	CheckEnabled      bool       `json:"check_enabled"`
+	AutoUpdateEnabled bool       `json:"auto_update_enabled"`
+	CurrentVersion    string     `json:"current_version,omitempty"`
+	LatestVersion     string     `json:"latest_version,omitempty"`
+	UpdateAvailable   bool       `json:"update_available"`
+	ReleaseURL        string     `json:"release_url,omitempty"`
+	PackageURL        string     `json:"package_url,omitempty"`
+	LastCheckedAt     *time.Time `json:"last_checked_at,omitempty"`
+	LastError         string     `json:"last_error,omitempty"`
+}
+
 type DailyScanState struct {
 	Date  string `json:"date"`
 	Count int    `json:"count"`
@@ -62,6 +75,7 @@ type RuntimeState struct {
 	Scan       ScanState      `json:"scan"`
 	Targets    []TargetState  `json:"targets,omitempty"`
 	DNS        DNSState       `json:"dns"`
+	Update     UpdateState    `json:"update"`
 }
 
 type App struct {
@@ -70,27 +84,37 @@ type App struct {
 	scanner  *scanner.Scanner
 	proxy    *proxy.Server
 	dns      *cloudflare.Client
+	version  string
 	mu       sync.Mutex
 	pool     []scanner.Result
 	failures map[netip.Addr]int
 	state    RuntimeState
 }
 
-func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner) *App {
+func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version string) *App {
 	state := RuntimeState{
 		Status: "starting", Listen: cfg.Listen, MaxLatency: cfg.MaxLatency.Value().String(),
 		DNS: DNSState{Enabled: cfg.DNS.Enabled, RecordName: cfg.DNS.RecordName},
+		Update: UpdateState{
+			CheckEnabled: cfg.Update.CheckEnabled, AutoUpdateEnabled: cfg.Update.AutoUpdateEnabled,
+			CurrentVersion: version,
+		},
 	}
 	if previous, err := ReadState(cfg.StateFile); err == nil {
 		today := time.Now().Format("2006-01-02")
 		if previous.DailyScan.Date == today {
 			state.DailyScan = previous.DailyScan
 		}
+		state.Update = previous.Update
+		state.Update.CheckEnabled = cfg.Update.CheckEnabled
+		state.Update.AutoUpdateEnabled = cfg.Update.AutoUpdateEnabled
+		state.Update.CurrentVersion = version
 	}
 	return &App{
 		cfg: cfg, logger: logger, scanner: s,
 		proxy:    proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
 		dns:      cloudflare.New(cfg.DNS),
+		version:  version,
 		failures: make(map[netip.Addr]int),
 		state:    state,
 	}
@@ -125,8 +149,18 @@ func (a *App) maintain(ctx context.Context) {
 	}
 	monitorTicker := time.NewTicker(a.cfg.LatencyMonitorInterval.Value())
 	retryTicker := time.NewTicker(a.cfg.HealthInterval.Value())
+	var updateC <-chan time.Time
+	var updateTicker *time.Ticker
+	if a.cfg.Update.CheckEnabled {
+		updateTicker = time.NewTicker(a.cfg.Update.CheckInterval.Value())
+		updateC = updateTicker.C
+		go a.checkUpdate(ctx)
+	}
 	defer monitorTicker.Stop()
 	defer retryTicker.Stop()
+	if updateTicker != nil {
+		defer updateTicker.Stop()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -135,6 +169,8 @@ func (a *App) maintain(ctx context.Context) {
 			if err := a.rescan(ctx, "scheduled"); err != nil {
 				a.logger.Error("定时扫描失败，继续使用原池", "error", err)
 			}
+		case <-updateC:
+			a.checkUpdate(ctx)
 		case <-retryTicker.C:
 			a.mu.Lock()
 			empty := len(a.pool) == 0
@@ -168,6 +204,36 @@ func (a *App) maintain(ctx context.Context) {
 			}
 			a.logger.Warn("目标池健康检查发现异常 IP，已保留健康 IP 继续转发", "healthy", status.healthyCount, "removed", status.removed)
 		}
+	}
+}
+
+func (a *App) checkUpdate(ctx context.Context) {
+	checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	result, err := updatecheck.Check(checkCtx, updatecheck.Config{Repository: a.cfg.Update.Repository}, a.version)
+	a.mu.Lock()
+	a.state.Update.CheckEnabled = a.cfg.Update.CheckEnabled
+	a.state.Update.AutoUpdateEnabled = a.cfg.Update.AutoUpdateEnabled
+	a.state.Update.CurrentVersion = result.CurrentVersion
+	if err != nil {
+		now := time.Now().UTC()
+		a.state.Update.LastCheckedAt = &now
+		a.state.Update.LastError = err.Error()
+		a.mu.Unlock()
+		a.saveState()
+		a.logger.Warn("检查更新失败", "error", err)
+		return
+	}
+	a.state.Update.LatestVersion = result.LatestVersion
+	a.state.Update.UpdateAvailable = result.UpdateAvailable
+	a.state.Update.ReleaseURL = result.ReleaseURL
+	a.state.Update.PackageURL = result.PackageURL
+	a.state.Update.LastCheckedAt = result.CheckedAt
+	a.state.Update.LastError = ""
+	a.mu.Unlock()
+	a.saveState()
+	if result.UpdateAvailable {
+		a.logger.Info("发现新版本", "current", result.CurrentVersion, "latest", result.LatestVersion, "auto_update", a.cfg.Update.AutoUpdateEnabled)
 	}
 }
 
@@ -556,6 +622,16 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 		fmt.Fprintln(w, "测速筛选        : 未启用")
 	}
 	fmt.Fprintf(w, "重选阈值        : 健康 IP 少于 %d 个时整池重选\n", cfg.MinHealthyCount)
+	if cfg.Update.CheckEnabled {
+		fmt.Fprintf(w, "更新检查        : 已启用，每 %s\n", cfg.Update.CheckInterval.Value())
+	} else {
+		fmt.Fprintln(w, "更新检查        : 未启用")
+	}
+	if cfg.Update.AutoUpdateEnabled {
+		fmt.Fprintln(w, "后台自动更新    : 已启用")
+	} else {
+		fmt.Fprintln(w, "后台自动更新    : 未启用")
+	}
 	state, err := ReadState(cfg.StateFile)
 	if err != nil {
 		fmt.Fprintln(w, "运行状态        : 尚无状态数据")
@@ -569,6 +645,18 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 	}
 	if state.DailyScan.Date != "" {
 		fmt.Fprintf(w, "今日扫描        : %s 已触发 %d 次\n", state.DailyScan.Date, state.DailyScan.Count)
+	}
+	if state.Update.LastCheckedAt != nil {
+		if state.Update.UpdateAvailable {
+			fmt.Fprintf(w, "版本更新        : 发现新版本 %s（当前 %s）\n", valueOr(state.Update.LatestVersion, "未知"), valueOr(state.Update.CurrentVersion, "未知"))
+			if state.Update.ReleaseURL != "" {
+				fmt.Fprintf(w, "更新地址        : %s\n", state.Update.ReleaseURL)
+			}
+		} else if state.Update.LastError != "" {
+			fmt.Fprintf(w, "版本更新        : 检查失败：%s\n", state.Update.LastError)
+		} else {
+			fmt.Fprintf(w, "版本更新        : 已是最新（%s）\n", valueOr(state.Update.CurrentVersion, "未知"))
+		}
 	}
 	fmt.Fprintf(w, "运行状态        : %s\n", statusText(state.Status))
 	if state.Scan.InProgress {

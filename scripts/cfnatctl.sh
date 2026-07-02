@@ -71,6 +71,11 @@ restart_if_running() {
   fi
 }
 
+json_value() {
+  local key="$1"
+  sed -n -E "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\\1/p" | head -n1
+}
+
 show_dashboard() {
   if [[ -t 1 && -n "${TERM:-}" ]]; then clear; fi
   echo "============================================================"
@@ -250,6 +255,97 @@ toggle_scan_interval() {
   done
 }
 
+toggle_update_check() {
+  local value
+  while true; do
+    read -r -p "启用定时检查更新？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config update_check_enabled true && return ;;
+      n|N|no|NO|No) set_config update_check_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+toggle_auto_update() {
+  local value
+  while true; do
+    read -r -p "启用后台自动更新？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes)
+        set_config_no_restart update_auto_update_enabled true || return
+        systemctl enable --now cfnat-update.timer >/dev/null 2>&1 || true
+        echo "后台自动更新已启用。"
+        return
+        ;;
+      n|N|no|NO|No)
+        set_config_no_restart update_auto_update_enabled false || return
+        echo "后台自动更新已关闭。"
+        return
+        ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+edit_update_check_interval() {
+  local value
+  while true; do
+    read -r -p "检查更新间隔，单位小时（例如 6）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 720 )); then
+      if set_config update_check_interval "${value}h"; then return; fi
+    fi
+    echo "请输入 1-720 的整数。" >&2
+  done
+}
+
+update_auto_enabled() {
+  awk '
+    /"update"[[:space:]]*:/ {inside=1}
+    inside && /"auto_update_enabled"[[:space:]]*:[[:space:]]*true/ {print "true"; exit}
+    inside && /^  }/ {inside=0}
+  ' "${CONFIG_FILE}" 2>/dev/null | grep -qx true
+}
+
+run_update() {
+  require_root || return
+  local mode="${1:-manual}"
+  if [[ "${mode}" != "--auto" ]]; then
+    require_auth || return
+  elif ! update_auto_enabled; then
+    echo "后台自动更新未启用。"
+    return 0
+  fi
+  local json latest package_url tmp archive dir
+  if ! json="$("${BIN}" -config "${CONFIG_FILE}" check-update)"; then
+    return 1
+  fi
+  if ! grep -q '"update_available"[[:space:]]*:[[:space:]]*true' <<<"${json}"; then
+    latest="$(json_value latest_version <<<"${json}")"
+    echo "当前已是最新版本${latest:+：${latest}}。"
+    return 0
+  fi
+  latest="$(json_value latest_version <<<"${json}")"
+  package_url="$(json_value package_url <<<"${json}")"
+  if [[ -z "${package_url}" ]]; then
+    echo "发现新版本 ${latest:-未知}，但 Release 中没有找到 cfnat-linux tar.gz 包。" >&2
+    return 1
+  fi
+  echo "发现新版本 ${latest}，开始下载并安装..."
+  tmp="$(mktemp -d)"
+  archive="${tmp}/cfnat-linux.tar.gz"
+  curl -fL --retry 3 -o "${archive}" "${package_url}"
+  tar -xzf "${archive}" -C "${tmp}"
+  dir="$(find "${tmp}" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  if [[ -z "${dir}" || ! -x "${dir}/scripts/install.sh" ]]; then
+    echo "更新包格式不正确，找不到 scripts/install.sh。" >&2
+    rm -rf "${tmp}"
+    return 1
+  fi
+  (cd "${dir}" && ./scripts/install.sh)
+  rm -rf "${tmp}"
+}
+
 edit_management_password() {
   local first second hashed
   while true; do
@@ -323,7 +419,10 @@ config_menu() {
     echo " 14) 定时完整重选开关"
     echo " 15) 管理密码开关"
     echo " 16) 修改管理密码"
-    echo " 17) 使用编辑器修改完整配置"
+    echo " 17) 定时检查更新开关"
+    echo " 18) 后台自动更新开关"
+    echo " 19) 检查更新间隔"
+    echo " 20) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -343,7 +442,10 @@ config_menu() {
       14) toggle_scan_interval; pause_screen ;;
       15) toggle_management_password; pause_screen ;;
       16) edit_management_password; pause_screen ;;
-      17)
+      17) toggle_update_check; pause_screen ;;
+      18) toggle_auto_update; pause_screen ;;
+      19) edit_update_check_interval; pause_screen ;;
+      20)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"
@@ -406,6 +508,7 @@ interactive_menu() {
     echo "  4) 查看实时日志"
     echo "  5) 运行一次诊断扫描"
     echo "  6) 一键关闭并卸载"
+    echo "  7) 立即检查并更新"
     echo "  0) 退出"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -415,6 +518,7 @@ interactive_menu() {
       4) journalctl -u cfnat -f ;;
       5) "${BIN}" -config "${CONFIG_FILE}" scan; pause_screen ;;
       6) uninstall_service ;;
+      7) run_update manual; pause_screen ;;
       0) exit 0 ;;
       *) echo "无效选项，请重新输入。"; sleep 1 ;;
     esac
@@ -430,6 +534,7 @@ case "${1:-menu}" in
   check) "${BIN}" -config "${CONFIG_FILE}" check-config ;;
   scan) require_root; restart_scan ;;
   config) config_menu ;;
+  update) run_update "${2:-manual}" ;;
   uninstall) uninstall_service ;;
-  *) echo "用法: cfnatctl {menu|status|start|stop|restart|logs|pool|check|scan|config|uninstall}" >&2; exit 2 ;;
+  *) echo "用法: cfnatctl {menu|status|start|stop|restart|logs|pool|check|scan|config|update|uninstall}" >&2; exit 2 ;;
 esac

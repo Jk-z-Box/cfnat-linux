@@ -13,6 +13,7 @@ import (
 	"github.com/cfnat-linux/cfnat-linux/internal/app"
 	"github.com/cfnat-linux/cfnat-linux/internal/config"
 	"github.com/cfnat-linux/cfnat-linux/internal/scanner"
+	updatecheck "github.com/cfnat-linux/cfnat-linux/internal/update"
 )
 
 var version = "dev"
@@ -56,6 +57,17 @@ func run() int {
 		fmt.Println("配置检查通过")
 		return 0
 	}
+	if command == "check-update" {
+		result, err := updatecheck.Check(context.Background(), updatecheck.Config{Repository: cfg.Update.Repository}, version)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "检查更新失败: %v\n", err)
+			return 1
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(result)
+		return 0
+	}
 	if command == "status" {
 		app.PrintStatus(os.Stdout, cfg)
 		return 0
@@ -94,11 +106,11 @@ func run() int {
 		return 0
 	}
 	if command != "run" {
-		fmt.Fprintf(os.Stderr, "未知命令 %q，可用命令: run, scan, status, config-set, check-config, migrate-config, version\n", command)
+		fmt.Fprintf(os.Stderr, "未知命令 %q，可用命令: run, scan, status, config-set, check-config, check-update, migrate-config, version\n", command)
 		return 2
 	}
 
-	if err := app.New(cfg, logger, s).Run(ctx); err != nil {
+	if err := app.New(cfg, logger, s, version).Run(ctx); err != nil {
 		logger.Error("服务退出", "error", err)
 		return 1
 	}

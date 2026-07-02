@@ -62,6 +62,13 @@ type ManagementConfig struct {
 	PasswordSHA256  string `json:"password_sha256"`
 }
 
+type UpdateConfig struct {
+	CheckEnabled      bool     `json:"check_enabled"`
+	CheckInterval     Duration `json:"check_interval"`
+	AutoUpdateEnabled bool     `json:"auto_update_enabled"`
+	Repository        string   `json:"repository"`
+}
+
 type Config struct {
 	ConfigVersion          int              `json:"config_version"`
 	Listen                 string           `json:"listen"`
@@ -93,11 +100,12 @@ type Config struct {
 	DNS                    DNSConfig        `json:"cloudflare_dns"`
 	SpeedTest              SpeedTestConfig  `json:"speed_test"`
 	Management             ManagementConfig `json:"management"`
+	Update                 UpdateConfig     `json:"update"`
 }
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          11,
+		ConfigVersion:          12,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -130,6 +138,10 @@ func Defaults() Config {
 			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50, Concurrency: 3,
 		},
 		Management: ManagementConfig{PasswordEnabled: false},
+		Update: UpdateConfig{
+			CheckEnabled: true, CheckInterval: Duration(6 * time.Hour), AutoUpdateEnabled: false,
+			Repository: "Jk-z-Box/cfnat-linux",
+		},
 	}
 }
 
@@ -211,8 +223,31 @@ func Migrate(path string) (bool, error) {
 		raw["management"] = map[string]any{"password_enabled": false, "password_sha256": ""}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 11 {
-		raw["config_version"] = 11
+	if _, ok := raw["update"]; !ok {
+		raw["update"] = map[string]any{
+			"check_enabled": true, "check_interval": "6h", "auto_update_enabled": false, "repository": "Jk-z-Box/cfnat-linux",
+		}
+		changed = true
+	} else if update, ok := raw["update"].(map[string]any); ok {
+		if _, ok := update["check_enabled"]; !ok {
+			update["check_enabled"] = true
+			changed = true
+		}
+		if _, ok := update["check_interval"]; !ok {
+			update["check_interval"] = "6h"
+			changed = true
+		}
+		if _, ok := update["auto_update_enabled"]; !ok {
+			update["auto_update_enabled"] = false
+			changed = true
+		}
+		if _, ok := update["repository"]; !ok {
+			update["repository"] = "Jk-z-Box/cfnat-linux"
+			changed = true
+		}
+	}
+	if version, _ := raw["config_version"].(float64); int(version) < 12 {
+		raw["config_version"] = 12
 		changed = true
 	}
 	if !changed {
@@ -269,6 +304,24 @@ func Set(path, key, value string) error {
 		cfg.Management.PasswordEnabled = parsed
 	case "management_password_sha256":
 		cfg.Management.PasswordSHA256 = value
+	case "update_check_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("update_check_enabled 只能是 true 或 false")
+		}
+		cfg.Update.CheckEnabled = parsed
+	case "update_auto_update_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("update_auto_update_enabled 只能是 true 或 false")
+		}
+		cfg.Update.AutoUpdateEnabled = parsed
+	case "update_check_interval":
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.New("update_check_interval 格式无效，请使用 6h、24h 等格式")
+		}
+		cfg.Update.CheckInterval = Duration(parsed)
 	case "zone_id":
 		cfg.DNS.ZoneID = value
 	case "record_name":
@@ -357,8 +410,11 @@ func (c *Config) Validate() error {
 	if c.TargetPort < 1 || c.TargetPort > 65535 {
 		return errors.New("target_port 超出范围")
 	}
-	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 || c.ScanInterval.Value() <= 0 || c.HealthInterval.Value() <= 0 || c.LatencyMonitorInterval.Value() <= 0 {
+	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 || c.ScanInterval.Value() <= 0 || c.HealthInterval.Value() <= 0 || c.LatencyMonitorInterval.Value() <= 0 || c.Update.CheckInterval.Value() <= 0 {
 		return errors.New("超时时间必须大于 0")
+	}
+	if strings.TrimSpace(c.Update.Repository) == "" || !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(c.Update.Repository) {
+		return errors.New("update.repository 必须是 owner/repo 格式")
 	}
 	if c.Management.PasswordSHA256 != "" && !regexp.MustCompile(`^[a-fA-F0-9]{64}$`).MatchString(c.Management.PasswordSHA256) {
 		return errors.New("management.password_sha256 必须是空值或 64 位 SHA-256 十六进制字符串")

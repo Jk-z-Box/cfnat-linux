@@ -25,6 +25,7 @@ func TestPrintStatusIncludesOperationalDetails(t *testing.T) {
 		Scan:      ScanState{Completed: true, CompletedAt: &now},
 		Targets:   []TargetState{{IP: netip.MustParseAddr("192.0.2.1"), LatencyMS: 88, Status: "healthy", CheckedAt: now}},
 		DNS:       DNSState{Enabled: true, RecordName: cfg.DNS.RecordName, Synced: true, SyncedIPs: []string{"192.0.2.1"}, LastSyncedAt: &now},
+		Update:    UpdateState{CheckEnabled: true, CurrentVersion: "v0.9.0", LatestVersion: "v0.10.0", UpdateAvailable: true, ReleaseURL: "https://github.com/Jk-z-Box/cfnat-linux/releases/tag/v0.10.0", LastCheckedAt: &now},
 	}
 	data, err := json.Marshal(state)
 	if err != nil {
@@ -35,7 +36,7 @@ func TestPrintStatusIncludesOperationalDetails(t *testing.T) {
 	}
 	var output bytes.Buffer
 	PrintStatus(&output, cfg)
-	for _, wanted := range []string{"0.0.0.0:1234", "今日扫描        : 2026-07-02 已触发 3 次", "扫描状态        : 已完成", "192.0.2.1", "健康", "已同步", "best.example.com"} {
+	for _, wanted := range []string{"0.0.0.0:1234", "今日扫描        : 2026-07-02 已触发 3 次", "发现新版本 v0.10.0", "扫描状态        : 已完成", "192.0.2.1", "健康", "已同步", "best.example.com"} {
 		if !strings.Contains(output.String(), wanted) {
 			t.Fatalf("status output missing %q:\n%s", wanted, output.String())
 		}
@@ -48,7 +49,7 @@ func TestDNSLatencySyncPolicy(t *testing.T) {
 	cfg.DNS.RecordType = "A"
 	cfg.DNS.SyncCount = 1
 	cfg.DNS.LatencySyncEnabled = false
-	app := New(cfg, nil, nil)
+	app := New(cfg, nil, nil, "v0.9.0")
 	now := time.Now().UTC()
 	app.state.DNS.Synced = true
 	app.state.DNS.LastSyncedAt = &now
