@@ -305,6 +305,15 @@ func Set(path, key, value string) error {
 	switch key {
 	case "listen":
 		cfg.Listen = value
+	case "ip_sources":
+		sources := []string{}
+		for _, line := range strings.Split(value, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				sources = append(sources, line)
+			}
+		}
+		cfg.IPSources = sources
 	case "max_latency":
 		parsed, err := time.ParseDuration(value)
 		if err != nil {
