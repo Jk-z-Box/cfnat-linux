@@ -320,6 +320,36 @@ edit_web_listen() {
   done
 }
 
+edit_web_auth() {
+  local username first second hashed
+  while true; do
+    read -r -p "Web 用户名: " username
+    if [[ -n "${username}" && "${username}" != *[[:space:]]* ]]; then
+      break
+    fi
+    echo "用户名不能为空且不能包含空白字符，请重新输入。" >&2
+  done
+  while true; do
+    read -r -s -p "新的 Web 密码: " first
+    echo
+    if [[ ${#first} -lt 6 ]]; then
+      echo "Web 密码至少 6 位，请重新输入。" >&2
+      continue
+    fi
+    read -r -s -p "再次输入 Web 密码: " second
+    echo
+    if [[ "${first}" != "${second}" ]]; then
+      echo "两次输入不一致，请重新输入。" >&2
+      continue
+    fi
+    hashed="$(hash_password "${first}")"
+    set_config web_username "${username}" || return
+    set_config web_password_sha256 "${hashed}" || return
+    echo "Web 用户名和密码已更新。"
+    return
+  done
+}
+
 toggle_shodan_panel() {
   local value
   while true; do
@@ -457,8 +487,9 @@ config_menu() {
     echo " 19) 检查更新间隔"
     echo " 20) Web 管理面板开关"
     echo " 21) Web 管理面板监听地址"
-    echo " 22) Shodan IP Panel 开关"
-    echo " 23) 使用编辑器修改完整配置"
+    echo " 22) Web 用户名和密码"
+    echo " 23) Shodan IP Panel 开关"
+    echo " 24) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -483,8 +514,9 @@ config_menu() {
       19) edit_update_check_interval; pause_screen ;;
       20) toggle_web_panel; pause_screen ;;
       21) edit_web_listen; pause_screen ;;
-      22) toggle_shodan_panel; pause_screen ;;
-      23)
+      22) edit_web_auth; pause_screen ;;
+      23) toggle_shodan_panel; pause_screen ;;
+      24)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"

@@ -83,6 +83,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.Web.Listen != "0.0.0.0:8787" {
 		t.Fatalf("web listen = %q", cfg.Web.Listen)
 	}
+	if cfg.Web.Username != "admin" || cfg.Web.PasswordSHA256 == "" {
+		t.Fatal("expected default web auth after migration")
+	}
 	if cfg.Shodan.Enabled {
 		t.Fatal("expected shodan panel to be disabled after migration")
 	}
@@ -189,6 +192,21 @@ func TestRejectInvalidWebListen(t *testing.T) {
 	cfg.Web.Listen = "bad-listen"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected invalid web listen validation error")
+	}
+}
+
+func TestRejectInvalidWebAuth(t *testing.T) {
+	cfg := Defaults()
+	cfg.Web.Enabled = true
+	cfg.Web.Username = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected empty web username validation error")
+	}
+	cfg = Defaults()
+	cfg.Web.Enabled = true
+	cfg.Web.PasswordSHA256 = "bad"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid web password hash validation error")
 	}
 }
 

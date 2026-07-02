@@ -85,7 +85,7 @@ prompt_latency_monitor_interval() {
 }
 
 prompt_web_settings() {
-  local value port
+  local value port first second
   while true; do
     read -r -p "启用 Web 管理面板？[y/N]: " value
     case "${value}" in
@@ -95,6 +95,8 @@ prompt_web_settings() {
     esac
   done
   WEB_LISTEN="0.0.0.0:8787"
+  WEB_USERNAME="admin"
+  WEB_PASSWORD_SHA256="8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
   while [[ "${WEB_BOOL}" == true ]]; do
     read -r -p "Web 管理面板监听地址 [0.0.0.0:8787]: " value
     value="${value:-0.0.0.0:8787}"
@@ -106,6 +108,28 @@ prompt_web_settings() {
       fi
     fi
     retry "Web 监听地址应类似 0.0.0.0:8787 或 [::]:8787"
+  done
+  while [[ "${WEB_BOOL}" == true ]]; do
+    read -r -p "Web 用户名 [admin]: " value
+    WEB_USERNAME="${value:-admin}"
+    [[ -n "${WEB_USERNAME}" && "${WEB_USERNAME}" != *[[:space:]]* ]] && break
+    retry "Web 用户名不能为空且不能包含空白字符"
+  done
+  while [[ "${WEB_BOOL}" == true ]]; do
+    read -r -s -p "Web 密码: " first
+    echo
+    if [[ ${#first} -lt 6 ]]; then
+      retry "Web 密码至少 6 位"
+      continue
+    fi
+    read -r -s -p "再次输入 Web 密码: " second
+    echo
+    if [[ "${first}" != "${second}" ]]; then
+      retry "两次密码不一致"
+      continue
+    fi
+    WEB_PASSWORD_SHA256="$(printf '%s' "${first}" | sha256sum | awk '{print $1}')"
+    break
   done
 }
 
@@ -315,7 +339,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   prompt_max_latency
   prompt_min_healthy_count
   prompt_latency_monitor_interval
-  WEB_BOOL=false; WEB_LISTEN="0.0.0.0:8787"; SHODAN_BOOL=false
+  WEB_BOOL=false; WEB_LISTEN="0.0.0.0:8787"; WEB_USERNAME="admin"; WEB_PASSWORD_SHA256="8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"; SHODAN_BOOL=false
   prompt_web_settings
   prompt_shodan_settings
   SPEED_TEST_BOOL=false; SPEED_TEST_MIN_MBPS=5; SPEED_TEST_TIMEOUT="10s"; SPEED_TEST_MAX_CANDIDATES=50; SPEED_TEST_CONCURRENCY=3
@@ -330,7 +354,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 13,
+  "config_version": 14,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -377,7 +401,9 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   },
   "web": {
     "enabled": ${WEB_BOOL},
-    "listen": "${WEB_LISTEN}"
+    "listen": "${WEB_LISTEN}",
+    "username": "${WEB_USERNAME}",
+    "password_sha256": "${WEB_PASSWORD_SHA256}"
   },
   "shodan": {
     "enabled": ${SHODAN_BOOL},

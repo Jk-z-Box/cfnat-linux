@@ -1,5 +1,5 @@
 {
-  "config_version": 13,
+  "config_version": 14,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -48,7 +48,9 @@
   },
   "web": {
     "enabled": false,
-    "listen": "0.0.0.0:8787"
+    "listen": "0.0.0.0:8787",
+    "username": "admin",
+    "password_sha256": "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
   },
   "shodan": {
     "enabled": false,
