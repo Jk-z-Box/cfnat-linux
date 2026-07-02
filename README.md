@@ -25,6 +25,7 @@
 - 可選啟用 Web 管理面板，透過瀏覽器查看 cfnat 與 Shodan 統一狀態摘要、保存常用配置、觸發重掃；狀態透過 Server-Sent Events 實時推送，不依賴定時輪詢。
 - Web 面板使用獨立的用戶名與密碼，與 SSH 菜單管理密碼互不干涉；敏感設定預設折疊，避免誤觸。
 - 內建 Shodan IP Panel：支援多配置、Shodan API 查詢、IP 結果保存與下載連結開關。
+- Shodan 區塊採用折疊式配置目錄，新增配置會以彈窗方式填寫，配置狀態、下載、修改和刪除集中管理。
 - 支援 Linux amd64、arm64 和 386。
 
 ## 工作流程
@@ -42,7 +43,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.13.0.tar.gz
+tar -xzf cfnat-linux-v0.14.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -110,6 +111,7 @@ Web 面板目前可管理：
 - 啟用/停用 Shodan IP Panel；
 - 管理 Shodan 多配置、API Key、查詢條件、抓取數量；
 - 執行 Shodan 查詢並下載生成的 IP 檔案。
+- 透過右上角「新增配置」彈窗建立 Shodan 配置；配置狀態、下載開關、下載連結、修改配置和刪除配置都收納在折疊目錄中。
 
 Web 面板運行在 cfnat 服務內，保持低權限執行。啟停服務、解除安裝、查看 journald 即時日誌和手動更新仍保留在 SSH 管理菜單中完成，避免 Web 面板持有 root 級 systemd 控制權限。
 
@@ -261,7 +263,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.13.0
+make release VERSION=v0.14.0
 ```
 
 ## 命令列
