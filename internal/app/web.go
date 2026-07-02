@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net"
@@ -153,7 +154,9 @@ func (w *webServer) handleCFNatScan(rw http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		if err := w.app.rescan(ctx, "web"); err != nil {
-			w.app.logger.Error("Web 触发扫描失败", "error", err)
+			if !errors.Is(err, errScanInProgress) {
+				w.app.logger.Error("Web 触发扫描失败", "error", err)
+			}
 		}
 	}()
 	w.redirect(rw, "已触发 cfnat 重新扫描。")

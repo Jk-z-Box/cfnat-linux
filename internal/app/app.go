@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,8 @@ import (
 	"github.com/cfnat-linux/cfnat-linux/internal/scanner"
 	updatecheck "github.com/cfnat-linux/cfnat-linux/internal/update"
 )
+
+var errScanInProgress = errors.New("scan already in progress")
 
 type ScanState struct {
 	InProgress  bool       `json:"in_progress"`
@@ -87,6 +90,7 @@ type App struct {
 	version    string
 	configPath string
 	mu         sync.Mutex
+	scanMu     sync.Mutex
 	eventMu    sync.Mutex
 	eventCond  *sync.Cond
 	eventSeq   uint64
@@ -143,6 +147,9 @@ func (a *App) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return
 			}
+			if errors.Is(err, errScanInProgress) {
+				return
+			}
 			a.logger.Error("初始扫描失败，服务保持运行并将在后台重试", "error", err, "retry_after", a.cfg.HealthInterval.Value())
 		}
 	}()
@@ -184,7 +191,9 @@ func (a *App) maintain(ctx context.Context) {
 			return
 		case <-scanC:
 			if err := a.rescan(ctx, "scheduled"); err != nil {
-				a.logger.Error("定时扫描失败，继续使用原池", "error", err)
+				if !errors.Is(err, errScanInProgress) {
+					a.logger.Error("定时扫描失败，继续使用原池", "error", err)
+				}
 			}
 		case <-updateC:
 			a.checkUpdate(ctx)
@@ -194,7 +203,9 @@ func (a *App) maintain(ctx context.Context) {
 			a.mu.Unlock()
 			if empty {
 				if err := a.rescan(ctx, "retry"); err != nil {
-					a.logger.Error("后台重试失败", "error", err)
+					if !errors.Is(err, errScanInProgress) {
+						a.logger.Error("后台重试失败", "error", err)
+					}
 				}
 				continue
 			}
@@ -212,7 +223,9 @@ func (a *App) maintain(ctx context.Context) {
 			if status.healthyCount < a.cfg.MinHealthyCount {
 				a.logger.Warn("健康 IP 数低于阈值，触发整池重选", "healthy", status.healthyCount, "min_healthy_count", a.cfg.MinHealthyCount)
 				if err := a.rescan(ctx, "health"); err != nil {
-					a.logger.Error("故障重选失败，继续使用原池", "error", err)
+					if !errors.Is(err, errScanInProgress) {
+						a.logger.Error("故障重选失败，继续使用原池", "error", err)
+					}
 				}
 				continue
 			}
@@ -255,6 +268,11 @@ func (a *App) checkUpdate(ctx context.Context) {
 }
 
 func (a *App) rescan(ctx context.Context, reason string) error {
+	if !a.scanMu.TryLock() {
+		a.logger.Info("跳过优选，已有扫描正在进行", "reason", reason)
+		return errScanInProgress
+	}
+	defer a.scanMu.Unlock()
 	a.logger.Info("触发优选", "reason", reason, "max_latency", a.cfg.MaxLatency.Value())
 	now := time.Now().UTC()
 	a.mu.Lock()
