@@ -279,15 +279,19 @@ func (m *Manager) Fetch(ctx context.Context) error {
 	profile.LastSuccessAt = success
 	profile.ReportedTotal = total
 	profile.UniqueIPsWritten = len(unique)
-	profile.LastFile = out
+	profile.LastFile = copyPath
 	profile.LastQuery = query
 	cfg.Profiles[cfg.ActiveProfile] = normalizeProfile(cfg.ActiveProfile, profile)
 	_ = m.SaveConfig(cfg)
-	m.setStatus(Status{State: "idle", LastRunAt: start, LastSuccessAt: success, ActiveProfile: cfg.ActiveProfile, LastQuery: query, ReportedTotal: total, RawMatchesFetched: len(raw), UniqueIPsWritten: len(unique), LastFile: out})
+	m.setStatus(Status{State: "idle", LastRunAt: start, LastSuccessAt: success, ActiveProfile: cfg.ActiveProfile, LastQuery: query, ReportedTotal: total, RawMatchesFetched: len(raw), UniqueIPsWritten: len(unique), LastFile: copyPath})
 	return nil
 }
 
 func (m *Manager) ProfilePath(name string) string {
+	return filepath.Join(m.cfg.DataDir, fmt.Sprintf("%s.txt", Slug(name)))
+}
+
+func (m *Manager) LegacyProfilePath(name string) string {
 	return filepath.Join(m.cfg.DataDir, fmt.Sprintf("shodan_ips_%s.txt", Slug(name)))
 }
 

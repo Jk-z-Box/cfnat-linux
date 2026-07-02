@@ -27,7 +27,7 @@
 - Web 介面預設繁體中文，右上角可切換繁體中文、簡體中文或英文，登出按鈕與語言切換集中放置。
 - 內建 Shodan IP Panel：支援多配置、Shodan API 查詢、IP 結果保存與下載連結開關。
 - Shodan 區塊採用折疊式配置目錄，新增配置會以彈窗方式填寫，刪除配置按鈕放在新增配置旁，配置狀態、下載和修改設定預設折疊管理。
-- Shodan 配置狀態按目前選中的 profile 顯示，切換到新配置時不會沿用其他配置的成功時間或 IP 數量。
+- Shodan 配置狀態按目前選中的 profile 顯示，切換到新配置時不會沿用其他配置的成功時間或 IP 數量；獲取成功後會以配置名生成 `<配置名>.txt`，並在 Web 配置狀態中顯示 VPS 本地文件路徑，可直接填入 `ip_sources`。
 - 支援 Linux amd64、arm64 和 386。
 
 ## 工作流程
@@ -45,10 +45,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.16.5.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.16.5/cfnat-linux-v0.16.5.tar.gz
+curl -fL -o cfnat-linux-v0.16.6.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.16.6/cfnat-linux-v0.16.6.tar.gz
 
-tar -xzf cfnat-linux-v0.16.5.tar.gz
+tar -xzf cfnat-linux-v0.16.6.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -127,6 +127,14 @@ Shodan IP Panel 的資料保存在：
 ```text
 /var/lib/cfnat/shodan
 ```
+
+每個配置獲取成功後會生成以配置名命名的 IP 文件，例如：
+
+```text
+/var/lib/cfnat/shodan/SG.txt
+```
+
+這個本地路徑會顯示在 Web 的「配置狀態」中，也可以直接填入 `ip_sources`。
 
 掃描日誌會彙總失敗原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。這樣可以直接判斷是線路不可達、TLS/SNI、探測網址、延遲閾值還是機房篩選導致無結果。
 
@@ -270,7 +278,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.16.5
+make release VERSION=v0.16.6
 ```
 
 ## 命令列
