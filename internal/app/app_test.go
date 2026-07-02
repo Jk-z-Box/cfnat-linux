@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cfnat-linux/cfnat-linux/internal/config"
+	"github.com/cfnat-linux/cfnat-linux/internal/shodan"
 )
 
 func TestPrintStatusIncludesOperationalDetails(t *testing.T) {
@@ -70,5 +71,42 @@ func TestDNSLatencySyncPolicy(t *testing.T) {
 	removed := map[netip.Addr]struct{}{netip.MustParseAddr("192.0.2.1"): {}}
 	if !app.shouldSyncDNSAfterPoolChangeLocked(app.state.DNS.SyncedIPs, desired, removed, now.Add(time.Minute)) {
 		t.Fatal("removed synced IP should sync immediately")
+	}
+}
+
+func TestShodanSummaryUsesActiveProfileState(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.StateFile = filepath.Join(dir, "state.json")
+	cfg.Shodan.Enabled = true
+	cfg.Shodan.DataDir = filepath.Join(dir, "shodan")
+	app := New(cfg, nil, nil, "v0.14.0", "")
+	manager := shodan.New(cfg.Shodan)
+	ws := &webServer{app: app, shodan: manager}
+	store := shodan.StoreConfig{
+		ActiveProfile: "JP",
+		Profiles: map[string]shodan.Profile{
+			"SG": {Name: "SG", LastSuccessAt: "2026-07-02T21:32:59+08:00", UniqueIPsWritten: 400},
+			"JP": {Name: "JP", APIKey: "test-key", Ports: "443", Countries: "JP", FetchCount: 200},
+		},
+	}
+	if err := manager.SaveConfig(store); err != nil {
+		t.Fatal(err)
+	}
+	statusPath := filepath.Join(cfg.Shodan.DataDir, "status.json")
+	statusData, _ := json.Marshal(shodan.Status{State: "idle", ActiveProfile: "SG", LastSuccessAt: "2026-07-02T21:32:59+08:00", UniqueIPsWritten: 400})
+	if err := writeState(statusPath, statusData); err != nil {
+		t.Fatal(err)
+	}
+	payload := ws.statusPayload()
+	got := payload["shodan"].(map[string]string)
+	if got["profile"] != "JP" {
+		t.Fatalf("profile = %q", got["profile"])
+	}
+	if got["ips"] != "0" {
+		t.Fatalf("ips = %q, want 0", got["ips"])
+	}
+	if got["last_success"] != "" {
+		t.Fatalf("last_success = %q, want empty", got["last_success"])
 	}
 }
