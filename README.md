@@ -107,7 +107,7 @@ Web 面板目前可管理：
 
 - 查看 cfnat 完整狀態；
 - 查看 cfnat 與 Shodan 的統一狀態摘要，頁面透過 SSE 長連線接收實時狀態推送，不需要手動刷新，也不依賴固定 N 秒輪詢；
-- 查看折疊式即時日誌摘要；
+- 查看折疊式 journald 即時日誌，內容對齊 SSH 菜單的 `journalctl -u cfnat -f`；
 - 暫停或恢復 TCP 轉發；Web 面板本身不會因此停止；
 - 觸發 cfnat 立即重新掃描；
 - 修改常用 cfnat 配置；
@@ -117,7 +117,7 @@ Web 面板目前可管理：
 - 執行 Shodan 查詢並下載生成的 IP 檔案。
 - 透過右上角「新增配置」彈窗建立 Shodan 配置；刪除配置按鈕放在新增配置旁，配置狀態、下載開關、下載連結與修改配置收納在折疊目錄中。
 
-Web 面板運行在 cfnat 服務內，保持低權限執行。啟停服務、解除安裝、查看 journald 即時日誌和手動更新仍保留在 SSH 管理菜單中完成，避免 Web 面板持有 root 級 systemd 控制權限。
+Web 面板運行在 cfnat 服務內，保持低權限執行。安裝腳本會讓 cfnat 服務附加 `systemd-journal` 群組，以便 Web 面板讀取 `journalctl -u cfnat -f` 即時日誌。啟停服務、解除安裝和手動更新仍保留在 SSH 管理菜單中完成，避免 Web 面板持有 root 級 systemd 控制權限。
 
 Shodan IP Panel 的資料保存在：
 

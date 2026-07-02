@@ -441,6 +441,7 @@ Wants=network-online.target
 Type=simple
 User=cfnat
 Group=cfnat
+SupplementaryGroups=systemd-journal
 EnvironmentFile=-/etc/cfnat/cfnat.env
 ExecStart=/usr/local/bin/cfnat -config /etc/cfnat/config.json run
 Restart=on-failure
