@@ -28,7 +28,7 @@ type webServer struct {
 	tmpl   *template.Template
 }
 
-func (a *App) serveWeb(ctx context.Context) error {
+func (a *App) serveWeb(ctx context.Context, ready chan<- error) error {
 	ws := &webServer{app: a, shodan: shodan.New(a.cfg.Shodan)}
 	ws.shodan.SetOnChange(a.broadcastState)
 	ws.tmpl = template.Must(template.New("panel").Funcs(template.FuncMap{
@@ -55,6 +55,9 @@ func (a *App) serveWeb(ctx context.Context) error {
 	lc := net.ListenConfig{}
 	listener, err := lc.Listen(ctx, "tcp", a.cfg.Web.Listen)
 	if err != nil {
+		if ready != nil {
+			ready <- err
+		}
 		return err
 	}
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
@@ -65,6 +68,9 @@ func (a *App) serveWeb(ctx context.Context) error {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 	a.logger.Info("Web 管理面板已启动", "listen", a.cfg.Web.Listen, "shodan_enabled", a.cfg.Shodan.Enabled)
+	if ready != nil {
+		ready <- nil
+	}
 	err = server.Serve(listener)
 	if err == http.ErrServerClosed {
 		return nil

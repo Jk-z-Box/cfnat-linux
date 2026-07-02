@@ -128,17 +128,24 @@ func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version, co
 }
 
 func (a *App) Run(ctx context.Context) error {
-	if err := a.rescan(ctx, "startup"); err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		a.logger.Error("初始扫描失败，服务保持运行并将在后台重试", "error", err, "retry_after", a.cfg.HealthInterval.Value())
-	}
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.proxy.Serve(ctx) }()
+	errCh := make(chan error, 2)
 	if a.cfg.Web.Enabled {
-		go func() { errCh <- a.serveWeb(ctx) }()
+		webReady := make(chan error, 1)
+		go func() { errCh <- a.serveWeb(ctx, webReady) }()
+		if err := <-webReady; err != nil {
+			a.setStatus("error")
+			return err
+		}
 	}
+	go func() { errCh <- a.proxy.Serve(ctx) }()
+	go func() {
+		if err := a.rescan(ctx, "startup"); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			a.logger.Error("初始扫描失败，服务保持运行并将在后台重试", "error", err, "retry_after", a.cfg.HealthInterval.Value())
+		}
+	}()
 	go a.maintain(ctx)
 	select {
 	case <-ctx.Done():

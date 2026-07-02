@@ -22,7 +22,7 @@
 - 顯示當日掃描/重選觸發次數，方便觀察是否頻繁重掃。
 - 管理面板可選啟用管理密碼，支援開關與修改；配置只保存 SHA-256 雜湊，不保存明文。
 - 定時檢查 GitHub Release；有新版本時顯示在狀態面板，並可選擇啟用 systemd timer 背景自動更新。
-- Web 管理面板新安裝時預設啟用，透過瀏覽器查看 cfnat 與 Shodan 統一狀態摘要、保存常用配置、暫停/恢復 TCP 轉發、觸發重掃；狀態透過 Server-Sent Events 實時推送，不依賴定時輪詢。
+- Web 管理面板新安裝時預設啟用，並優先於 TCP 轉發與初始掃描啟動；透過瀏覽器查看 cfnat 與 Shodan 統一狀態摘要、保存常用配置、暫停/恢復 TCP 轉發、觸發重掃；狀態透過 Server-Sent Events 實時推送，不依賴定時輪詢。
 - Web 面板使用獨立的用戶名與密碼，與 SSH 菜單管理密碼互不干涉；敏感設定預設折疊，避免誤觸。
 - Web 介面預設繁體中文，右上角可切換繁體中文、簡體中文或英文，登出按鈕與語言切換集中放置。
 - 內建 Shodan IP Panel：支援多配置、Shodan API 查詢、IP 結果保存與下載連結開關。
@@ -45,10 +45,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.16.2.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.16.2/cfnat-linux-v0.16.2.tar.gz
+curl -fL -o cfnat-linux-v0.16.3.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.16.3/cfnat-linux-v0.16.3.tar.gz
 
-tar -xzf cfnat-linux-v0.16.2.tar.gz
+tar -xzf cfnat-linux-v0.16.3.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -270,7 +270,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.16.2
+make release VERSION=v0.16.3
 ```
 
 ## 命令列
