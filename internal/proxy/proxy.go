@@ -54,15 +54,21 @@ func (s *Server) Toggle() bool {
 	return next
 }
 
-func (s *Server) Serve(ctx context.Context) error {
+func (s *Server) Serve(ctx context.Context, ready chan<- error) error {
 	lc := net.ListenConfig{}
 	listener, err := lc.Listen(ctx, "tcp", s.listen)
 	if err != nil {
+		if ready != nil {
+			ready <- err
+		}
 		return err
 	}
 	defer listener.Close()
 	go func() { <-ctx.Done(); _ = listener.Close() }()
 	s.logger.Info("TCP 转发服务已启动", "listen", s.listen, "target_port", s.targetPort)
+	if ready != nil {
+		ready <- nil
+	}
 	var connections sync.WaitGroup
 	defer connections.Wait()
 	for {

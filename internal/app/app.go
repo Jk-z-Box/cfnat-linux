@@ -141,7 +141,12 @@ func (a *App) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	go func() { errCh <- a.proxy.Serve(ctx) }()
+	proxyReady := make(chan error, 1)
+	go func() { errCh <- a.proxy.Serve(ctx, proxyReady) }()
+	if err := <-proxyReady; err != nil {
+		a.setStatus("error")
+		return err
+	}
 	go func() {
 		if err := a.rescan(ctx, "startup"); err != nil {
 			if ctx.Err() != nil {
@@ -200,7 +205,11 @@ func (a *App) maintain(ctx context.Context) {
 		case <-retryTicker.C:
 			a.mu.Lock()
 			empty := len(a.pool) == 0
+			scanning := a.state.Scan.InProgress
 			a.mu.Unlock()
+			if scanning {
+				continue
+			}
 			if empty {
 				if err := a.rescan(ctx, "retry"); err != nil {
 					if !errors.Is(err, errScanInProgress) {
@@ -269,7 +278,7 @@ func (a *App) checkUpdate(ctx context.Context) {
 
 func (a *App) rescan(ctx context.Context, reason string) error {
 	if !a.scanMu.TryLock() {
-		a.logger.Info("跳过优选，已有扫描正在进行", "reason", reason)
+		a.logger.Debug("跳过优选，已有扫描正在进行", "reason", reason)
 		return errScanInProgress
 	}
 	defer a.scanMu.Unlock()
