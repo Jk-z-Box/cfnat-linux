@@ -57,41 +57,47 @@ type SpeedTestConfig struct {
 	Concurrency   int      `json:"concurrency"`
 }
 
+type ManagementConfig struct {
+	PasswordEnabled bool   `json:"password_enabled"`
+	PasswordSHA256  string `json:"password_sha256"`
+}
+
 type Config struct {
-	ConfigVersion          int             `json:"config_version"`
-	Listen                 string          `json:"listen"`
-	IPVersion              int             `json:"ip_version"`
-	IPSources              []string        `json:"ip_sources"`
-	RandomIPs              bool            `json:"random_ips"`
-	MaxCandidates          int             `json:"max_candidates"`
-	ValidIPCount           int             `json:"valid_ip_count"`
-	PoolSize               int             `json:"pool_size"`
-	MinHealthyCount        int             `json:"min_healthy_count"`
-	Concurrency            int             `json:"concurrency"`
-	TargetPort             int             `json:"target_port"`
-	TLS                    bool            `json:"tls"`
-	TLSServerName          string          `json:"tls_server_name"`
-	InsecureSkipVerify     bool            `json:"insecure_skip_verify"`
-	CheckURL               string          `json:"check_url"`
-	ExpectedStatus         int             `json:"expected_status"`
-	MaxLatency             Duration        `json:"max_latency"`
-	DialTimeout            Duration        `json:"dial_timeout"`
-	Colos                  []string        `json:"colos"`
-	ScanIntervalEnabled    bool            `json:"scan_interval_enabled"`
-	ScanInterval           Duration        `json:"scan_interval"`
-	LatencyMonitorInterval Duration        `json:"latency_monitor_interval"`
-	HealthInterval         Duration        `json:"health_interval"`
-	HealthFailures         int             `json:"health_failures"`
-	StateFile              string          `json:"state_file"`
-	SourceCacheDir         string          `json:"source_cache_dir"`
-	LogLevel               string          `json:"log_level"`
-	DNS                    DNSConfig       `json:"cloudflare_dns"`
-	SpeedTest              SpeedTestConfig `json:"speed_test"`
+	ConfigVersion          int              `json:"config_version"`
+	Listen                 string           `json:"listen"`
+	IPVersion              int              `json:"ip_version"`
+	IPSources              []string         `json:"ip_sources"`
+	RandomIPs              bool             `json:"random_ips"`
+	MaxCandidates          int              `json:"max_candidates"`
+	ValidIPCount           int              `json:"valid_ip_count"`
+	PoolSize               int              `json:"pool_size"`
+	MinHealthyCount        int              `json:"min_healthy_count"`
+	Concurrency            int              `json:"concurrency"`
+	TargetPort             int              `json:"target_port"`
+	TLS                    bool             `json:"tls"`
+	TLSServerName          string           `json:"tls_server_name"`
+	InsecureSkipVerify     bool             `json:"insecure_skip_verify"`
+	CheckURL               string           `json:"check_url"`
+	ExpectedStatus         int              `json:"expected_status"`
+	MaxLatency             Duration         `json:"max_latency"`
+	DialTimeout            Duration         `json:"dial_timeout"`
+	Colos                  []string         `json:"colos"`
+	ScanIntervalEnabled    bool             `json:"scan_interval_enabled"`
+	ScanInterval           Duration         `json:"scan_interval"`
+	LatencyMonitorInterval Duration         `json:"latency_monitor_interval"`
+	HealthInterval         Duration         `json:"health_interval"`
+	HealthFailures         int              `json:"health_failures"`
+	StateFile              string           `json:"state_file"`
+	SourceCacheDir         string           `json:"source_cache_dir"`
+	LogLevel               string           `json:"log_level"`
+	DNS                    DNSConfig        `json:"cloudflare_dns"`
+	SpeedTest              SpeedTestConfig  `json:"speed_test"`
+	Management             ManagementConfig `json:"management"`
 }
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          10,
+		ConfigVersion:          11,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -123,6 +129,7 @@ func Defaults() Config {
 			Enabled: false, URL: "https://speed.cloudflare.com/__down?bytes=50000000",
 			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50, Concurrency: 3,
 		},
+		Management: ManagementConfig{PasswordEnabled: false},
 	}
 }
 
@@ -200,8 +207,12 @@ func Migrate(path string) (bool, error) {
 		raw["scan_interval_enabled"] = true
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 10 {
-		raw["config_version"] = 10
+	if _, ok := raw["management"]; !ok {
+		raw["management"] = map[string]any{"password_enabled": false, "password_sha256": ""}
+		changed = true
+	}
+	if version, _ := raw["config_version"].(float64); int(version) < 11 {
+		raw["config_version"] = 11
 		changed = true
 	}
 	if !changed {
@@ -250,6 +261,14 @@ func Set(path, key, value string) error {
 			return errors.New("scan_interval_enabled 只能是 true 或 false")
 		}
 		cfg.ScanIntervalEnabled = parsed
+	case "management_password_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("management_password_enabled 只能是 true 或 false")
+		}
+		cfg.Management.PasswordEnabled = parsed
+	case "management_password_sha256":
+		cfg.Management.PasswordSHA256 = value
 	case "zone_id":
 		cfg.DNS.ZoneID = value
 	case "record_name":
@@ -340,6 +359,12 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 || c.ScanInterval.Value() <= 0 || c.HealthInterval.Value() <= 0 || c.LatencyMonitorInterval.Value() <= 0 {
 		return errors.New("超时时间必须大于 0")
+	}
+	if c.Management.PasswordSHA256 != "" && !regexp.MustCompile(`^[a-fA-F0-9]{64}$`).MatchString(c.Management.PasswordSHA256) {
+		return errors.New("management.password_sha256 必须是空值或 64 位 SHA-256 十六进制字符串")
+	}
+	if c.Management.PasswordEnabled && c.Management.PasswordSHA256 == "" {
+		return errors.New("启用管理密码时 management.password_sha256 不能为空")
 	}
 	if c.SpeedTest.Enabled {
 		if c.SpeedTest.MinMBps <= 0 {

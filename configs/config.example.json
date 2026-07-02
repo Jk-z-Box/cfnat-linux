@@ -1,5 +1,5 @@
 {
-  "config_version": 10,
+  "config_version": 11,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -35,6 +35,10 @@
     "timeout": "10s",
     "max_candidates": 50,
     "concurrency": 3
+  },
+  "management": {
+    "password_enabled": false,
+    "password_sha256": ""
   },
   "cloudflare_dns": {
     "enabled": false,

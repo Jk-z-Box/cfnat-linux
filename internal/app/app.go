@@ -47,15 +47,21 @@ type DNSState struct {
 	LastError    string     `json:"last_error,omitempty"`
 }
 
+type DailyScanState struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+}
+
 type RuntimeState struct {
-	UpdatedAt  time.Time     `json:"updated_at"`
-	Status     string        `json:"status"`
-	Listen     string        `json:"listen"`
-	MaxLatency string        `json:"max_latency"`
-	PrimaryIP  string        `json:"primary_ip,omitempty"`
-	Scan       ScanState     `json:"scan"`
-	Targets    []TargetState `json:"targets,omitempty"`
-	DNS        DNSState      `json:"dns"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	Status     string         `json:"status"`
+	Listen     string         `json:"listen"`
+	MaxLatency string         `json:"max_latency"`
+	PrimaryIP  string         `json:"primary_ip,omitempty"`
+	DailyScan  DailyScanState `json:"daily_scan"`
+	Scan       ScanState      `json:"scan"`
+	Targets    []TargetState  `json:"targets,omitempty"`
+	DNS        DNSState       `json:"dns"`
 }
 
 type App struct {
@@ -71,15 +77,22 @@ type App struct {
 }
 
 func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner) *App {
+	state := RuntimeState{
+		Status: "starting", Listen: cfg.Listen, MaxLatency: cfg.MaxLatency.Value().String(),
+		DNS: DNSState{Enabled: cfg.DNS.Enabled, RecordName: cfg.DNS.RecordName},
+	}
+	if previous, err := ReadState(cfg.StateFile); err == nil {
+		today := time.Now().Format("2006-01-02")
+		if previous.DailyScan.Date == today {
+			state.DailyScan = previous.DailyScan
+		}
+	}
 	return &App{
 		cfg: cfg, logger: logger, scanner: s,
 		proxy:    proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
 		dns:      cloudflare.New(cfg.DNS),
 		failures: make(map[netip.Addr]int),
-		state: RuntimeState{
-			Status: "starting", Listen: cfg.Listen, MaxLatency: cfg.MaxLatency.Value().String(),
-			DNS: DNSState{Enabled: cfg.DNS.Enabled, RecordName: cfg.DNS.RecordName},
-		},
+		state:    state,
 	}
 }
 
@@ -162,6 +175,7 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	a.logger.Info("触发优选", "reason", reason, "max_latency", a.cfg.MaxLatency.Value())
 	now := time.Now().UTC()
 	a.mu.Lock()
+	a.incrementDailyScanLocked(now)
 	a.state.Status = "scanning"
 	a.state.Scan = ScanState{InProgress: true, Completed: false, Reason: reason, StartedAt: &now}
 	a.mu.Unlock()
@@ -211,6 +225,14 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 
 	a.syncDNS(ctx)
 	return nil
+}
+
+func (a *App) incrementDailyScanLocked(now time.Time) {
+	date := now.Local().Format("2006-01-02")
+	if a.state.DailyScan.Date != date {
+		a.state.DailyScan = DailyScanState{Date: date}
+	}
+	a.state.DailyScan.Count++
 }
 
 type healthStatus struct {
@@ -544,6 +566,9 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 			fmt.Fprintln(w, "DNS 解析        : 未启用")
 		}
 		return
+	}
+	if state.DailyScan.Date != "" {
+		fmt.Fprintf(w, "今日扫描        : %s 已触发 %d 次\n", state.DailyScan.Date, state.DailyScan.Count)
 	}
 	fmt.Fprintf(w, "运行状态        : %s\n", statusText(state.Status))
 	if state.Scan.InProgress {

@@ -19,6 +19,8 @@
 - DNS 採用「先建立新記錄、再刪除舊記錄」，掃描失敗時絕不清空解析。
 - systemd 開機啟動、自動重啟、journald 日誌與低權限執行。
 - 首次掃描無結果時保持背景執行並定期重試，不再進入 systemd 重啟循環。
+- 顯示當日掃描/重選觸發次數，方便觀察是否頻繁重掃。
+- 管理面板可選啟用管理密碼，支援開關與修改；配置只保存 SHA-256 雜湊，不保存明文。
 - 支援 Linux amd64、arm64 和 386。
 
 ## 工作流程
@@ -36,7 +38,7 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-tar -xzf cfnat-linux-v0.8.1.tar.gz
+tar -xzf cfnat-linux-v0.9.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -70,12 +72,15 @@ sudo cfnatctl
 - 下載測速篩選狀態與速度門檻；
 - 健康 IP 低於幾個時會整池重選；
 - 掃描正在進行、已經完成或失敗；
+- 當日掃描觸發次數；
 - 目前最優 IP；
 - 優選池每個 IP 的延遲、colo 和健康狀態；
 - Cloudflare DNS 是否啟用、是否同步成功、解析網域和同步 IP。
 - DNS 延遲排序同步是否啟用，以及冷卻時間。
 
 面板下方提供執行開關、立即重掃、診斷掃描、修改設定、即時日誌以及一鍵關閉並解除安裝。執行狀態同時儲存於 `/var/lib/cfnat/state.json`。
+
+可在 `sudo cfnatctl` → 修改配置 中啟用管理密碼。啟用後，進入管理面板、啟停服務、重啟掃描、修改配置和解除安裝都需要輸入管理密碼；`status`、`logs`、`check` 等只讀命令不需要密碼。密碼以 SHA-256 雜湊形式保存在 `/etc/cfnat/config.json`。
 
 掃描日誌會彙總失敗原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。這樣可以直接判斷是線路不可達、TLS/SNI、探測網址、延遲閾值還是機房篩選導致無結果。
 
@@ -153,6 +158,8 @@ DNS 同步分為兩類：
 | `speed_test.timeout` | `10s` | 單個 IP 下載測速時間 |
 | `speed_test.max_candidates` | `50` | TCP 初篩後最多測速的候選 IP 數 |
 | `speed_test.concurrency` | `3` | 下載測速並發數 |
+| `management.password_enabled` | `false` | 是否啟用 `cfnatctl` 管理密碼 |
+| `management.password_sha256` | `""` | 管理密碼 SHA-256 雜湊 |
 | `cloudflare_dns.sync_count` | `1` | 同步排名前幾個 IP |
 | `cloudflare_dns.ttl` | `1` | Cloudflare API 中 `1` 表示自動 TTL |
 | `cloudflare_dns.latency_sync_enabled` | `false` | 是否允許 DNS 按延遲排序冷卻同步 |
@@ -196,7 +203,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.8.1
+make release VERSION=v0.9.0
 ```
 
 ## 命令列

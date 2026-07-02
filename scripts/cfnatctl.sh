@@ -4,12 +4,53 @@ set -Eeuo pipefail
 CONFIG_FILE="/etc/cfnat/config.json"
 ENV_FILE="/etc/cfnat/cfnat.env"
 BIN="/usr/local/bin/cfnat"
+AUTH_OK=false
 
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     echo "此操作需要管理员权限，请运行: sudo cfnatctl" >&2
     return 1
   fi
+}
+
+management_password_enabled() {
+  awk '
+    /"management"[[:space:]]*:/ {inside=1}
+    inside && /"password_enabled"[[:space:]]*:[[:space:]]*true/ {print "true"; exit}
+    inside && /^  }/ {inside=0}
+  ' "${CONFIG_FILE}" 2>/dev/null | grep -qx true
+}
+
+management_password_hash() {
+  awk '
+    /"management"[[:space:]]*:/ {inside=1}
+    inside && /"password_sha256"/ {print; exit}
+    inside && /^  }/ {inside=0}
+  ' "${CONFIG_FILE}" 2>/dev/null | sed -E 's/.*"password_sha256"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/'
+}
+
+hash_password() {
+  printf '%s' "$1" | sha256sum | awk '{print $1}'
+}
+
+require_auth() {
+  if [[ "${AUTH_OK}" == true ]]; then return 0; fi
+  management_password_enabled || { AUTH_OK=true; return 0; }
+  local expected input actual
+  expected="$(management_password_hash)"
+  if [[ ! "${expected}" =~ ^[A-Fa-f0-9]{64}$ ]]; then
+    echo "管理密码已启用，但密码哈希无效，请手动检查 ${CONFIG_FILE}。" >&2
+    return 1
+  fi
+  read -r -s -p "管理密码: " input
+  echo
+  actual="$(hash_password "${input}")"
+  if [[ "${actual}" == "${expected}" ]]; then
+    AUTH_OK=true
+    return 0
+  fi
+  echo "管理密码错误。" >&2
+  return 1
 }
 
 pause_screen() {
@@ -49,6 +90,15 @@ set_config() {
   local key="$1" value="$2"
   if "${BIN}" -config "${CONFIG_FILE}" config-set "${key}" "${value}"; then
     restart_if_running
+    return 0
+  fi
+  return 1
+}
+
+set_config_no_restart() {
+  local key="$1" value="$2"
+  if "${BIN}" -config "${CONFIG_FILE}" config-set "${key}" "${value}"; then
+    echo "配置已保存。"
     return 0
   fi
   return 1
@@ -200,6 +250,46 @@ toggle_scan_interval() {
   done
 }
 
+edit_management_password() {
+  local first second hashed
+  while true; do
+    read -r -s -p "新的管理密码: " first
+    echo
+    if [[ ${#first} -lt 6 ]]; then
+      echo "管理密码至少 6 位，请重新输入。" >&2
+      continue
+    fi
+    read -r -s -p "再次输入管理密码: " second
+    echo
+    if [[ "${first}" != "${second}" ]]; then
+      echo "两次输入不一致，请重新输入。" >&2
+      continue
+    fi
+    hashed="$(hash_password "${first}")"
+    set_config_no_restart management_password_sha256 "${hashed}" || return
+    set_config_no_restart management_password_enabled true || return
+    AUTH_OK=true
+    echo "管理密码已启用/更新。"
+    return
+  done
+}
+
+toggle_management_password() {
+  if management_password_enabled; then
+    read -r -p "确认关闭管理密码？[y/N]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes)
+        set_config_no_restart management_password_enabled false
+        AUTH_OK=true
+        ;;
+      *) echo "已取消。" ;;
+    esac
+  else
+    echo "开启管理密码前需要先设置密码。"
+    edit_management_password
+  fi
+}
+
 edit_dns_latency_sync_interval() {
   local value
   while true; do
@@ -213,6 +303,7 @@ edit_dns_latency_sync_interval() {
 
 config_menu() {
   require_root || return
+  require_auth || return
   while true; do
     echo
     echo "---------------------- 修改配置 ---------------------------"
@@ -230,7 +321,9 @@ config_menu() {
     echo " 12) 下载测速最低速度"
     echo " 13) 下载测速并发数"
     echo " 14) 定时完整重选开关"
-    echo " 15) 使用编辑器修改完整配置"
+    echo " 15) 管理密码开关"
+    echo " 16) 修改管理密码"
+    echo " 17) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -248,7 +341,9 @@ config_menu() {
       12) edit_speed_test_min; pause_screen ;;
       13) edit_speed_test_concurrency; pause_screen ;;
       14) toggle_scan_interval; pause_screen ;;
-      15)
+      15) toggle_management_password; pause_screen ;;
+      16) edit_management_password; pause_screen ;;
+      17)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"
@@ -270,6 +365,7 @@ config_menu() {
 
 toggle_service() {
   require_root || return
+  require_auth || return
   if service_active; then
     systemctl stop cfnat
     echo "服务已关闭。"
@@ -281,12 +377,14 @@ toggle_service() {
 
 restart_scan() {
   require_root || return
+  require_auth || return
   systemctl restart cfnat
   echo "服务已重启，正在重新扫描。"
 }
 
 uninstall_service() {
   require_root || return
+  require_auth || return
   echo "这将停止并卸载 cfnat-linux，但保留配置和状态文件。"
   read -r -p "请输入 UNINSTALL 确认: " answer
   if [[ "${answer}" != "UNINSTALL" ]]; then
@@ -299,6 +397,7 @@ uninstall_service() {
 
 interactive_menu() {
   require_root || exit 1
+  require_auth || exit 1
   while true; do
     show_dashboard
     echo "  1) 运行开关（启动/停止）"
@@ -325,7 +424,7 @@ interactive_menu() {
 case "${1:-menu}" in
   menu) interactive_menu ;;
   status) show_dashboard ;;
-  start|stop|restart) require_root; systemctl "$1" cfnat ;;
+  start|stop|restart) require_root; require_auth || exit 1; systemctl "$1" cfnat ;;
   logs) journalctl -u cfnat -f ;;
   pool) "${BIN}" -config "${CONFIG_FILE}" status ;;
   check) "${BIN}" -config "${CONFIG_FILE}" check-config ;;

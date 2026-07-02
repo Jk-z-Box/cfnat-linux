@@ -288,7 +288,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 10,
+  "config_version": 11,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -322,6 +322,10 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "timeout": "${SPEED_TEST_TIMEOUT}",
     "max_candidates": ${SPEED_TEST_MAX_CANDIDATES},
     "concurrency": ${SPEED_TEST_CONCURRENCY}
+  },
+  "management": {
+    "password_enabled": false,
+    "password_sha256": ""
   },
   "cloudflare_dns": {
     "enabled": ${DNS_BOOL},

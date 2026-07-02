@@ -65,6 +65,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if !cfg.ScanIntervalEnabled {
 		t.Fatal("expected scan interval to be enabled after migration")
 	}
+	if cfg.Management.PasswordEnabled {
+		t.Fatal("expected management password to be disabled after migration")
+	}
 }
 
 func TestDNSRecordTypeAuto(t *testing.T) {
@@ -142,6 +145,15 @@ func TestRejectInvalidSpeedTestConcurrency(t *testing.T) {
 	cfg.SpeedTest.Concurrency = 0
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected speed concurrency validation error")
+	}
+}
+
+func TestRejectInvalidManagementPasswordHash(t *testing.T) {
+	cfg := Defaults()
+	cfg.Management.PasswordEnabled = true
+	cfg.Management.PasswordSHA256 = "not-a-sha256"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected management password hash validation error")
 	}
 }
 
