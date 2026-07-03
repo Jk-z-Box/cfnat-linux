@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cfnat-linux/cfnat-linux/internal/config"
+	"github.com/cfnat-linux/cfnat-linux/internal/scanner"
 	"github.com/cfnat-linux/cfnat-linux/internal/shodan"
 )
 
@@ -74,6 +75,52 @@ func TestDNSLatencySyncPolicy(t *testing.T) {
 	}
 }
 
+func TestSelectPoolAfterHealthScanReplacesWhenScanIsFaster(t *testing.T) {
+	current := []scanner.Result{
+		result("192.0.2.1", 120),
+		result("192.0.2.2", 130),
+	}
+	scanned := []scanner.Result{
+		result("192.0.2.10", 80),
+		result("192.0.2.11", 90),
+		result("192.0.2.12", 100),
+	}
+	pool, strategy := selectPoolAfterScan("health", current, scanned, 3)
+	if strategy != "replace_better_scan" {
+		t.Fatalf("strategy = %q, want replace_better_scan", strategy)
+	}
+	assertIPs(t, pool, "192.0.2.10", "192.0.2.11", "192.0.2.12")
+}
+
+func TestSelectPoolAfterHealthScanKeepsHealthyAndFillsWhenScanIsSlower(t *testing.T) {
+	current := []scanner.Result{
+		result("192.0.2.1", 80),
+		result("192.0.2.2", 90),
+		result("192.0.2.3", 100),
+	}
+	scanned := []scanner.Result{
+		result("192.0.2.20", 120),
+		result("192.0.2.21", 130),
+		result("192.0.2.22", 140),
+		result("192.0.2.23", 150),
+	}
+	pool, strategy := selectPoolAfterScan("health", current, scanned, 5)
+	if strategy != "keep_healthy_fill" {
+		t.Fatalf("strategy = %q, want keep_healthy_fill", strategy)
+	}
+	assertIPs(t, pool, "192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.20", "192.0.2.21")
+}
+
+func TestSelectPoolAfterNonHealthScanReplaces(t *testing.T) {
+	current := []scanner.Result{result("192.0.2.1", 80)}
+	scanned := []scanner.Result{result("192.0.2.20", 120), result("192.0.2.21", 130)}
+	pool, strategy := selectPoolAfterScan("scheduled", current, scanned, 2)
+	if strategy != "replace" {
+		t.Fatalf("strategy = %q, want replace", strategy)
+	}
+	assertIPs(t, pool, "192.0.2.20", "192.0.2.21")
+}
+
 func TestShodanSummaryUsesActiveProfileState(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Defaults()
@@ -108,5 +155,21 @@ func TestShodanSummaryUsesActiveProfileState(t *testing.T) {
 	}
 	if got["last_success"] != "" {
 		t.Fatalf("last_success = %q, want empty", got["last_success"])
+	}
+}
+
+func result(ip string, latency int64) scanner.Result {
+	return scanner.Result{IP: netip.MustParseAddr(ip), LatencyMS: latency, CheckedAt: time.Unix(0, 0).UTC()}
+}
+
+func assertIPs(t *testing.T, results []scanner.Result, want ...string) {
+	t.Helper()
+	if len(results) != len(want) {
+		t.Fatalf("len(results) = %d, want %d: %#v", len(results), len(want), results)
+	}
+	for i, result := range results {
+		if result.IP.String() != want[i] {
+			t.Fatalf("results[%d] = %s, want %s", i, result.IP, want[i])
+		}
 	}
 }

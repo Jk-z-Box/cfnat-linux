@@ -309,7 +309,10 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 		a.logger.Warn("有效 IP 少于目标池大小", "valid", len(results), "wanted", a.cfg.PoolSize)
 	}
 	size := min(len(results), a.cfg.PoolSize)
-	pool := append([]scanner.Result(nil), results[:size]...)
+	a.mu.Lock()
+	currentHealthy := a.currentHealthyPoolLocked()
+	a.mu.Unlock()
+	pool, strategy := selectPoolAfterScan(reason, currentHealthy, results, size)
 	completed := time.Now().UTC()
 	targets := make([]TargetState, 0, len(pool))
 	for _, result := range pool {
@@ -331,10 +334,103 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	}
 	a.mu.Unlock()
 	a.proxy.Update(pool)
+	if strategy == "keep_healthy_fill" {
+		a.logger.Info("健康重选完成，保留现有健康 IP 并补齐转发池", "strategy", strategy, "targets", len(pool), "primary_ip", pool[0].IP.String())
+	} else {
+		a.logger.Info("重选完成，转发池已热替换", "strategy", strategy, "targets", len(pool), "primary_ip", pool[0].IP.String())
+	}
 	a.saveState()
 
 	a.syncDNS(ctx)
 	return nil
+}
+
+func (a *App) currentHealthyPoolLocked() []scanner.Result {
+	healthy := make(map[netip.Addr]bool, len(a.state.Targets))
+	if len(a.state.Targets) == 0 {
+		for _, result := range a.pool {
+			healthy[result.IP] = true
+		}
+	} else {
+		for _, target := range a.state.Targets {
+			if target.Status == "healthy" {
+				healthy[target.IP] = true
+			}
+		}
+	}
+	pool := make([]scanner.Result, 0, len(a.pool))
+	for _, result := range a.pool {
+		if healthy[result.IP] {
+			pool = append(pool, result)
+		}
+	}
+	sortResults(pool)
+	return pool
+}
+
+func selectPoolAfterScan(reason string, currentHealthy, scanned []scanner.Result, size int) ([]scanner.Result, string) {
+	if size <= 0 || len(scanned) == 0 {
+		return nil, "empty"
+	}
+	newPool := append([]scanner.Result(nil), scanned...)
+	sortResults(newPool)
+	if len(newPool) > size {
+		newPool = newPool[:size]
+	}
+	oldHealthy := uniqueResults(currentHealthy)
+	sortResults(oldHealthy)
+	if reason != "health" || len(oldHealthy) == 0 {
+		return newPool, "replace"
+	}
+	if newPool[0].LatencyMS < oldHealthy[0].LatencyMS {
+		return newPool, "replace_better_scan"
+	}
+	merged := make([]scanner.Result, 0, size)
+	seen := make(map[netip.Addr]struct{}, size)
+	for _, result := range oldHealthy {
+		if len(merged) >= size {
+			break
+		}
+		if _, ok := seen[result.IP]; ok {
+			continue
+		}
+		seen[result.IP] = struct{}{}
+		merged = append(merged, result)
+	}
+	for _, result := range newPool {
+		if len(merged) >= size {
+			break
+		}
+		if _, ok := seen[result.IP]; ok {
+			continue
+		}
+		seen[result.IP] = struct{}{}
+		merged = append(merged, result)
+	}
+	sortResults(merged)
+	return merged, "keep_healthy_fill"
+}
+
+func uniqueResults(results []scanner.Result) []scanner.Result {
+	seen := make(map[netip.Addr]struct{}, len(results))
+	unique := make([]scanner.Result, 0, len(results))
+	for _, result := range results {
+		if _, ok := seen[result.IP]; ok {
+			continue
+		}
+		seen[result.IP] = struct{}{}
+		unique = append(unique, result)
+	}
+	return unique
+}
+
+func sortResults(results []scanner.Result) {
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].LatencyMS == results[j].LatencyMS {
+			return results[i].IP.String() < results[j].IP.String()
+		}
+		return results[i].LatencyMS < results[j].LatencyMS
+	})
 }
 
 func (a *App) incrementDailyScanLocked(now time.Time) {
