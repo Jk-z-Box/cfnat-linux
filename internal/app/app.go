@@ -288,10 +288,13 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	a.incrementDailyScanLocked(now)
 	a.state.Status = "scanning"
 	a.state.Scan = ScanState{InProgress: true, Completed: false, Reason: reason, StartedAt: &now}
+	scanBaseHealthy := a.currentHealthyPoolLocked()
 	a.mu.Unlock()
 	a.saveState()
 
-	results, err := a.scanner.Scan(ctx)
+	results, err := a.scanner.ScanProgress(ctx, func(partial []scanner.Result) {
+		a.applyScanProgress(reason, partial)
+	})
 	if err != nil {
 		a.mu.Lock()
 		a.state.Scan.InProgress = false
@@ -309,10 +312,7 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 		a.logger.Warn("有效 IP 少于目标池大小", "valid", len(results), "wanted", a.cfg.PoolSize)
 	}
 	size := min(len(results), a.cfg.PoolSize)
-	a.mu.Lock()
-	currentHealthy := a.currentHealthyPoolLocked()
-	a.mu.Unlock()
-	pool, strategy := selectPoolAfterScan(reason, currentHealthy, results, size)
+	pool, strategy := selectPoolAfterScan(reason, scanBaseHealthy, results, size)
 	completed := time.Now().UTC()
 	targets := make([]TargetState, 0, len(pool))
 	for _, result := range pool {
@@ -343,6 +343,38 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 
 	a.syncDNS(ctx)
 	return nil
+}
+
+func (a *App) applyScanProgress(reason string, results []scanner.Result) {
+	if len(results) == 0 {
+		return
+	}
+	a.mu.Lock()
+	currentHealthy := a.currentHealthyPoolLocked()
+	a.mu.Unlock()
+	pool := selectProgressPool(currentHealthy, results, a.cfg.PoolSize)
+	if len(pool) == 0 {
+		return
+	}
+	targets := make([]TargetState, 0, len(pool))
+	for _, result := range pool {
+		targets = append(targets, TargetState{IP: result.IP, LatencyMS: result.LatencyMS, SpeedMBps: result.SpeedMBps, Colo: result.Colo, Status: "healthy", CheckedAt: result.CheckedAt})
+	}
+	a.mu.Lock()
+	a.pool = pool
+	for _, result := range results {
+		a.failures[result.IP] = 0
+	}
+	a.state.Status = "running"
+	a.state.PrimaryIP = pool[0].IP.String()
+	a.state.Targets = targets
+	a.state.Scan.InProgress = true
+	a.state.Scan.Completed = false
+	a.state.Scan.LastError = ""
+	a.mu.Unlock()
+	a.proxy.Update(pool)
+	a.logger.Info("分批扫描已有合格 IP，已热更新转发池", "reason", reason, "valid", len(results), "targets", len(pool), "primary_ip", pool[0].IP.String())
+	a.saveState()
 }
 
 func (a *App) currentHealthyPoolLocked() []scanner.Result {
@@ -409,6 +441,37 @@ func selectPoolAfterScan(reason string, currentHealthy, scanned []scanner.Result
 	}
 	sortResults(merged)
 	return merged, "keep_healthy_fill"
+}
+
+func selectProgressPool(currentHealthy, scanned []scanner.Result, size int) []scanner.Result {
+	if size <= 0 {
+		return nil
+	}
+	merged := make([]scanner.Result, 0, size)
+	seen := make(map[netip.Addr]struct{}, size)
+	add := func(results []scanner.Result) {
+		for _, result := range results {
+			if len(merged) >= size {
+				return
+			}
+			if _, ok := seen[result.IP]; ok {
+				continue
+			}
+			seen[result.IP] = struct{}{}
+			merged = append(merged, result)
+		}
+	}
+	scanned = uniqueResults(scanned)
+	currentHealthy = uniqueResults(currentHealthy)
+	sortResults(scanned)
+	sortResults(currentHealthy)
+	add(scanned)
+	add(currentHealthy)
+	sortResults(merged)
+	if len(merged) > size {
+		merged = merged[:size]
+	}
+	return merged
 }
 
 func uniqueResults(results []scanner.Result) []scanner.Result {

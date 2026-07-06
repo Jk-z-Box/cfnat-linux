@@ -43,6 +43,8 @@ type Scanner struct {
 	client *http.Client
 }
 
+type ProgressFunc func([]Result)
+
 type ProbeError struct {
 	Kind string
 	Err  error
@@ -57,6 +59,10 @@ func New(cfg config.Config, logger *slog.Logger) *Scanner {
 }
 
 func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
+	return s.ScanProgress(ctx, nil)
+}
+
+func (s *Scanner) ScanProgress(ctx context.Context, onProgress ProgressFunc) ([]Result, error) {
 	prefixes, err := s.readPrefixes(ctx)
 	if err != nil {
 		return nil, err
@@ -70,25 +76,83 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 	if len(ranked) == 0 {
 		return nil, fmt.Errorf("没有可建立 TCP 连接的候选 IP（失败统计: %s）", formatCounts(tcpFailures))
 	}
-	shortlistSize := max(s.cfg.ValidIPCount*10, 100)
-	if shortlistSize > len(ranked) {
-		shortlistSize = len(ranked)
-	}
-	candidates = make([]netip.Addr, shortlistSize)
-	for i := range candidates {
-		candidates[i] = ranked[i].IP
-	}
+	batchSize := s.scanBatchSize(len(ranked))
 	httpConcurrency := min(s.cfg.Concurrency, 20)
-	s.logger.Info("TCP 初筛完成", "reachable", len(ranked), "shortlist", len(candidates), "http_concurrency", httpConcurrency, "failures", tcpFailures)
-	speeds := map[netip.Addr]float64{}
-	if s.cfg.SpeedTest.Enabled {
-		var speedFailures map[string]int
-		candidates, speeds, speedFailures = s.filterByDownloadSpeed(ctx, candidates)
-		if len(candidates) == 0 {
-			s.logger.Warn("下载测速筛选无通过 IP", "tested", min(shortlistSize, s.cfg.SpeedTest.MaxCandidates), "min_mbps", s.cfg.SpeedTest.MinMBps, "failures", speedFailures)
-			return nil, fmt.Errorf("没有找到满足测速条件的 IP（失败统计: %s）", formatCounts(speedFailures))
+	s.logger.Info("TCP 初筛完成", "reachable", len(ranked), "batch_size", batchSize, "http_concurrency", httpConcurrency, "failures", tcpFailures)
+
+	valid := make([]Result, 0, s.cfg.ValidIPCount)
+	seenValid := make(map[netip.Addr]struct{}, s.cfg.ValidIPCount)
+	probeFailures := map[string]int{}
+	speedFailuresTotal := map[string]int{}
+	batch := 0
+	for start := 0; start < len(ranked) && len(valid) < s.cfg.ValidIPCount; start += batchSize {
+		end := min(start+batchSize, len(ranked))
+		batch++
+		batchCandidates := make([]netip.Addr, 0, end-start)
+		for _, item := range ranked[start:end] {
+			batchCandidates = append(batchCandidates, item.IP)
 		}
-		s.logger.Info("下载测速筛选完成", "passed", len(candidates), "min_mbps", s.cfg.SpeedTest.MinMBps, "failures", speedFailures)
+		s.logger.Info("开始分批复筛", "batch", batch, "offset", start, "candidates", len(batchCandidates))
+		speeds := map[netip.Addr]float64{}
+		if s.cfg.SpeedTest.Enabled {
+			var speedFailures map[string]int
+			batchCandidates, speeds, speedFailures = s.filterByDownloadSpeed(ctx, batchCandidates)
+			mergeCounts(speedFailuresTotal, speedFailures)
+			if len(batchCandidates) == 0 {
+				s.logger.Warn("本批下载测速筛选无通过 IP", "batch", batch, "tested", min(end-start, s.cfg.SpeedTest.MaxCandidates), "min_mbps", s.cfg.SpeedTest.MinMBps, "failures", speedFailures)
+				continue
+			}
+			s.logger.Info("本批下载测速筛选完成", "batch", batch, "passed", len(batchCandidates), "min_mbps", s.cfg.SpeedTest.MinMBps, "failures", speedFailures)
+		}
+		batchValid, batchFailures := s.probeCandidates(ctx, batchCandidates, speeds)
+		mergeCounts(probeFailures, batchFailures)
+		newValid := 0
+		for _, result := range batchValid {
+			if _, ok := seenValid[result.IP]; ok {
+				continue
+			}
+			seenValid[result.IP] = struct{}{}
+			valid = append(valid, result)
+			newValid++
+		}
+		sort.Slice(valid, func(i, j int) bool { return valid[i].LatencyMS < valid[j].LatencyMS })
+		if len(valid) > s.cfg.ValidIPCount {
+			valid = valid[:s.cfg.ValidIPCount]
+		}
+		if newValid > 0 {
+			s.logger.Info("本批复筛通过", "batch", batch, "new_valid", newValid, "total_valid", len(valid), "best_ip", valid[0].IP.String(), "best_latency_ms", valid[0].LatencyMS, "failures", batchFailures)
+			if onProgress != nil {
+				onProgress(append([]Result(nil), valid...))
+			}
+		} else {
+			s.logger.Warn("本批复筛无通过 IP", "batch", batch, "failures", batchFailures)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(valid) == 0 {
+		s.logger.Warn("扫描失败统计", "speed_failures", speedFailuresTotal, "probe_failures", probeFailures)
+		if len(speedFailuresTotal) > 0 && len(probeFailures) == 0 {
+			return nil, fmt.Errorf("没有找到满足测速条件的 IP（失败统计: %s）", formatCounts(speedFailuresTotal))
+		}
+		return nil, fmt.Errorf("没有找到符合条件的 IP（测速失败统计: %s，复筛失败统计: %s）", formatCounts(speedFailuresTotal), formatCounts(probeFailures))
+	}
+	s.logger.Info("扫描完成", "valid", len(valid), "best_ip", valid[0].IP.String(), "best_latency_ms", valid[0].LatencyMS, "best_speed_mbps", valid[0].SpeedMBps, "speed_failures", speedFailuresTotal, "probe_failures", probeFailures)
+	return valid, nil
+}
+
+func (s *Scanner) scanBatchSize(reachable int) int {
+	batchSize := max(s.cfg.ValidIPCount*10, 100)
+	if s.cfg.SpeedTest.Enabled {
+		batchSize = max(batchSize, s.cfg.SpeedTest.MaxCandidates)
+	}
+	return min(batchSize, reachable)
+}
+
+func (s *Scanner) probeCandidates(ctx context.Context, candidates []netip.Addr, speeds map[netip.Addr]float64) ([]Result, map[string]int) {
+	if len(candidates) == 0 {
+		return nil, map[string]int{}
 	}
 
 	scanCtx, cancel := context.WithCancel(ctx)
@@ -97,6 +161,7 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 	results := make(chan Result, max(s.cfg.Concurrency, s.cfg.ValidIPCount))
 	failures := make(chan string, len(candidates))
 	var wg sync.WaitGroup
+	httpConcurrency := min(s.cfg.Concurrency, 20)
 	workers := min(httpConcurrency, len(candidates))
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -130,7 +195,7 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 	}()
 	go func() { wg.Wait(); close(results); close(failures) }()
 
-	valid := make([]Result, 0, s.cfg.ValidIPCount)
+	valid := make([]Result, 0, min(len(candidates), s.cfg.ValidIPCount))
 	counts := map[string]int{}
 	for results != nil || failures != nil {
 		select {
@@ -156,19 +221,11 @@ func (s *Scanner) Scan(ctx context.Context) ([]Result, error) {
 			}
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	sort.Slice(valid, func(i, j int) bool { return valid[i].LatencyMS < valid[j].LatencyMS })
 	if len(valid) > s.cfg.ValidIPCount {
 		valid = valid[:s.cfg.ValidIPCount]
 	}
-	if len(valid) == 0 {
-		s.logger.Warn("扫描失败统计", "failures", counts)
-		return nil, fmt.Errorf("没有找到符合条件的 IP（失败统计: %s）", formatCounts(counts))
-	}
-	s.logger.Info("扫描完成", "valid", len(valid), "best_ip", valid[0].IP.String(), "best_latency_ms", valid[0].LatencyMS, "best_speed_mbps", valid[0].SpeedMBps, "failures", counts)
-	return valid, nil
+	return valid, counts
 }
 
 func (s *Scanner) filterByDownloadSpeed(ctx context.Context, candidates []netip.Addr) ([]netip.Addr, map[netip.Addr]float64, map[string]int) {
@@ -623,6 +680,12 @@ func formatCounts(counts map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func mergeCounts(dst, src map[string]int) {
+	for key, value := range src {
+		dst[key] += value
+	}
 }
 
 func generateCandidates(prefixes []netip.Prefix, random bool, limit int) ([]netip.Addr, error) {

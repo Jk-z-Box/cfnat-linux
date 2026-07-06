@@ -6,10 +6,10 @@
 
 - 從本機檔案或 HTTP(S) 位址讀取 IPv4/IPv6 CIDR 或裸 IP，並快取成功下載的遠端 IP 池。
 - 隨機抽樣或依順序展開候選 IP。
-- 兩階段掃描：先進行輕量 TCP 初篩，再對最快候選執行 TLS、HTTP 狀態碼與延遲檢查，避免大併發完整請求觸發限速。
-- 可選下載測速篩選：TCP 初篩後對低延遲候選 IP 進行下載測速，低於指定 MB/s 或無速度的 IP 直接剔除。
+- 分批掃描：先進行輕量 TCP 初篩，再按延遲分批執行下載測速與 TLS/HTTP 複篩；前一批不足時會繼續處理後續 TCP 可連候選，避免多 IP 源場景只檢查前 200 個就失敗。
+- 可選下載測速篩選：TCP 初篩後按批次對低延遲候選 IP 進行下載測速，低於指定 MB/s 或無速度的 IP 直接剔除；若本批不足，會繼續測試下一批。
 - 可透過 `/cdn-cgi/trace` 依 Cloudflare `colo` 篩選資料中心。
-- 維護低延遲目標池，依最新延遲排序；新連線始終優先連線目前延遲最低的 IP，失敗時再依序 fallback。
+- 維護低延遲目標池，依最新延遲排序；掃描過程中每批通過複篩的 IP 會先合併進健康池並熱更新轉發，新連線始終優先連線目前延遲最低的 IP，失敗時再依序 fallback。
 - 預設每 2 秒監控一次池內 IP 延遲，可自訂監控間隔並熱更新轉發順序。
 - 定期健康檢查；單個 IP 連續失敗後會先從轉發池剔除，剩餘健康 IP 繼續轉發。
 - 當健康 IP 少於自訂門檻時，背景觸發整池重選；若新掃描池最佳延遲低於目前健康池，整池熱替換；若新掃描池較慢，保留目前健康 IP，並從新掃描結果中按延遲補齊到目標池大小。
@@ -33,7 +33,7 @@
 ## 工作流程
 
 ```text
-IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HTTP 複篩 → 延遲排序 → 目標池 → 最低延遲優先 TCP 轉發
+IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批 TLS/HTTP 複篩 → 批次通過先熱更新目標池 → 最終延遲排序 → 最低延遲優先 TCP 轉發
                                   ↓
                          Cloudflare DNS 同步
                                   ↓
@@ -45,10 +45,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 下載測速篩選 → TLS/HT
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.16.8.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.16.8/cfnat-linux-v0.16.8.tar.gz
+curl -fL -o cfnat-linux-v0.16.9.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.16.9/cfnat-linux-v0.16.9.tar.gz
 
-tar -xzf cfnat-linux-v0.16.8.tar.gz
+tar -xzf cfnat-linux-v0.16.9.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -139,7 +139,7 @@ Shodan IP Panel 的資料保存在：
 
 掃描日誌會彙總失敗原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。這樣可以直接判斷是線路不可達、TLS/SNI、探測網址、延遲閾值還是機房篩選導致無結果。
 
-若啟用下載測速篩選，TCP 初篩完成後會優先取低延遲候選 IP 做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：先按 TCP 延遲篩出候選，再按 speed_test.concurrency 並發下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續 TLS/HTTP 複篩。
+若啟用下載測速篩選，TCP 初篩完成後會按 TCP 延遲排序分批做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：每批按 `speed_test.concurrency` 並發下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續 TLS/HTTP 複篩。若本批通過數不足，會繼續處理下一批 TCP 可連候選；每批通過最終複篩的 IP 會先合併進健康池並熱更新 TCP 轉發，DNS 則仍等本輪掃描完成後再按同步策略更新。
 
 也可以直接使用命令：
 
@@ -222,7 +222,7 @@ DNS 同步分為兩類：
 | `speed_test.url` | `https://speed.cloudflare.com/__down?bytes=50000000` | 下載測速 URL |
 | `speed_test.min_mbps` | `5` | 最低下載速度，單位 MB/s |
 | `speed_test.timeout` | `10s` | 單個 IP 下載測速時間 |
-| `speed_test.max_candidates` | `50` | TCP 初篩後最多測速的候選 IP 數 |
+| `speed_test.max_candidates` | `50` | 每批最多測速的候選 IP 數；多 IP 源時會分批繼續處理後續 TCP 可連候選 |
 | `speed_test.concurrency` | `3` | 下載測速並發數 |
 | `management.password_enabled` | `false` | 是否啟用 `cfnatctl` 管理密碼 |
 | `management.password_sha256` | `""` | 管理密碼 SHA-256 雜湊 |
@@ -279,7 +279,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.16.8
+make release VERSION=v0.16.9
 ```
 
 ## 命令列

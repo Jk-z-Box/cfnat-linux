@@ -121,6 +121,20 @@ func TestSelectPoolAfterNonHealthScanReplaces(t *testing.T) {
 	assertIPs(t, pool, "192.0.2.20", "192.0.2.21")
 }
 
+func TestSelectProgressPoolMergesNewValidWithCurrentHealthy(t *testing.T) {
+	current := []scanner.Result{
+		result("192.0.2.1", 80),
+		result("192.0.2.2", 150),
+		result("192.0.2.3", 160),
+	}
+	scanned := []scanner.Result{
+		result("192.0.2.20", 70),
+		result("192.0.2.21", 120),
+	}
+	pool := selectProgressPool(current, scanned, 4)
+	assertIPs(t, pool, "192.0.2.20", "192.0.2.1", "192.0.2.21", "192.0.2.2")
+}
+
 func TestShodanSummaryUsesActiveProfileState(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Defaults()
