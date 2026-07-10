@@ -18,21 +18,26 @@ import (
 )
 
 type Profile struct {
-	Name             string `json:"name"`
-	APIKey           string `json:"api_key"`
-	Ports            string `json:"ports"`
-	Countries        string `json:"countries"`
-	ASNs             string `json:"asns"`
-	Keywords         string `json:"keywords"`
-	ExtraFilters     string `json:"extra_filters"`
-	RawQuery         string `json:"raw_query"`
-	FetchCount       int    `json:"fetch_count"`
-	DownloadEnabled  bool   `json:"download_enabled"`
-	LastSuccessAt    string `json:"last_success_at"`
-	ReportedTotal    int    `json:"reported_total"`
-	UniqueIPsWritten int    `json:"unique_ips_written"`
-	LastFile         string `json:"last_file"`
-	LastQuery        string `json:"last_query"`
+	Name               string `json:"name"`
+	APIKey             string `json:"api_key"`
+	Ports              string `json:"ports"`
+	Countries          string `json:"countries"`
+	ASNs               string `json:"asns"`
+	Keywords           string `json:"keywords"`
+	ExtraFilters       string `json:"extra_filters"`
+	RawQuery           string `json:"raw_query"`
+	FetchCount         int    `json:"fetch_count"`
+	DownloadEnabled    bool   `json:"download_enabled"`
+	AutoFetchEnabled   bool   `json:"auto_fetch_enabled"`
+	AutoFetchInterval  string `json:"auto_fetch_interval"`
+	LastAutoFetchAt    string `json:"last_auto_fetch_at"`
+	NextAutoFetchAt    string `json:"next_auto_fetch_at"`
+	LastAutoFetchError string `json:"last_auto_fetch_error"`
+	LastSuccessAt      string `json:"last_success_at"`
+	ReportedTotal      int    `json:"reported_total"`
+	UniqueIPsWritten   int    `json:"unique_ips_written"`
+	LastFile           string `json:"last_file"`
+	LastQuery          string `json:"last_query"`
 }
 
 type StoreConfig struct {
@@ -237,6 +242,14 @@ func (m *Manager) FetchAsync(ctx context.Context) {
 }
 
 func (m *Manager) Fetch(ctx context.Context) error {
+	cfg, err := m.Config()
+	if err != nil {
+		return err
+	}
+	return m.FetchProfile(ctx, cfg.ActiveProfile)
+}
+
+func (m *Manager) FetchProfile(ctx context.Context, profileName string) error {
 	if !m.mu.TryLock() {
 		m.setStatus(Status{State: "running", LastError: "已有 Shodan 获取任务正在运行"})
 		return nil
@@ -245,9 +258,14 @@ func (m *Manager) Fetch(ctx context.Context) error {
 	if err := m.ensure(); err != nil {
 		return err
 	}
-	cfg, profile, _, err := m.Active()
+	cfg, err := m.Config()
 	if err != nil {
 		return err
+	}
+	profileName = Slug(profileName)
+	profile, ok := cfg.Profiles[profileName]
+	if !ok {
+		return fmt.Errorf("Shodan 配置不存在: %s", profileName)
 	}
 	query := BuildQuery(profile)
 	if strings.TrimSpace(profile.APIKey) == "" {
@@ -261,7 +279,7 @@ func (m *Manager) Fetch(ctx context.Context) error {
 		return err
 	}
 	start := now()
-	m.setStatus(Status{State: "running", LastRunAt: start, ActiveProfile: cfg.ActiveProfile, LastQuery: query})
+	m.setStatus(Status{State: "running", LastRunAt: start, ActiveProfile: profileName, LastQuery: query})
 	total, raw, unique, err := m.search(ctx, profile.APIKey, query, profile.FetchCount)
 	if err != nil {
 		m.updateError(err)
@@ -273,18 +291,126 @@ func (m *Manager) Fetch(ctx context.Context) error {
 		m.updateError(err)
 		return err
 	}
-	copyPath := m.ProfilePath(cfg.ActiveProfile)
+	copyPath := m.ProfilePath(profileName)
 	_ = os.WriteFile(copyPath, []byte(strings.Join(unique, "\n")+"\n"), 0640)
 	success := now()
 	profile.LastSuccessAt = success
+	profile.LastAutoFetchError = ""
 	profile.ReportedTotal = total
 	profile.UniqueIPsWritten = len(unique)
 	profile.LastFile = copyPath
 	profile.LastQuery = query
-	cfg.Profiles[cfg.ActiveProfile] = normalizeProfile(cfg.ActiveProfile, profile)
+	cfg.Profiles[profileName] = normalizeProfile(profileName, profile)
 	_ = m.SaveConfig(cfg)
-	m.setStatus(Status{State: "idle", LastRunAt: start, LastSuccessAt: success, ActiveProfile: cfg.ActiveProfile, LastQuery: query, ReportedTotal: total, RawMatchesFetched: len(raw), UniqueIPsWritten: len(unique), LastFile: copyPath})
+	m.setStatus(Status{State: "idle", LastRunAt: start, LastSuccessAt: success, ActiveProfile: profileName, LastQuery: query, ReportedTotal: total, RawMatchesFetched: len(raw), UniqueIPsWritten: len(unique), LastFile: copyPath})
 	return nil
+}
+
+func (m *Manager) UpdateActiveSchedule(enabled bool, interval string) error {
+	cfg, err := m.Config()
+	if err != nil {
+		return err
+	}
+	name := cfg.ActiveProfile
+	p := cfg.Profiles[name]
+	parsed, err := parseAutoFetchInterval(interval)
+	if err != nil {
+		return err
+	}
+	p.AutoFetchEnabled = enabled
+	p.AutoFetchInterval = parsed.String()
+	if enabled {
+		p.NextAutoFetchAt = time.Now().Add(parsed).Format(time.RFC3339)
+	} else {
+		p.NextAutoFetchAt = ""
+	}
+	cfg.Profiles[name] = normalizeProfile(name, p)
+	return m.SaveConfig(cfg)
+}
+
+func (m *Manager) AutoFetchLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.RunDueAutoFetch(ctx)
+		}
+	}
+}
+
+func (m *Manager) RunDueAutoFetch(ctx context.Context) {
+	if !m.cfg.Enabled {
+		return
+	}
+	cfg, err := m.Config()
+	if err != nil {
+		return
+	}
+	nowTime := time.Now()
+	for name, profile := range cfg.Profiles {
+		profile = normalizeProfile(name, profile)
+		if !profile.AutoFetchEnabled {
+			continue
+		}
+		interval, err := parseAutoFetchInterval(profile.AutoFetchInterval)
+		if err != nil {
+			profile.LastAutoFetchError = err.Error()
+			cfg.Profiles[name] = profile
+			_ = m.SaveConfig(cfg)
+			continue
+		}
+		due := false
+		if profile.NextAutoFetchAt == "" {
+			due = true
+		} else if next, err := time.Parse(time.RFC3339, profile.NextAutoFetchAt); err != nil || !next.After(nowTime) {
+			due = true
+		}
+		if !due {
+			continue
+		}
+		_ = m.markAutoFetchDue(name, nowTime, interval)
+		if err := m.FetchProfile(ctx, name); err != nil {
+			m.recordAutoFetch(name, err)
+		} else {
+			m.recordAutoFetch(name, nil)
+		}
+	}
+}
+
+func (m *Manager) markAutoFetchDue(name string, at time.Time, interval time.Duration) error {
+	cfg, err := m.Config()
+	if err != nil {
+		return err
+	}
+	p := cfg.Profiles[name]
+	p.LastAutoFetchAt = at.Format(time.RFC3339)
+	p.NextAutoFetchAt = at.Add(interval).Format(time.RFC3339)
+	cfg.Profiles[name] = normalizeProfile(name, p)
+	return m.SaveConfig(cfg)
+}
+
+func (m *Manager) recordAutoFetch(name string, err error) {
+	cfg, cfgErr := m.Config()
+	if cfgErr != nil {
+		return
+	}
+	p := cfg.Profiles[name]
+	interval, intervalErr := parseAutoFetchInterval(p.AutoFetchInterval)
+	if intervalErr != nil {
+		interval = 6 * time.Hour
+	}
+	p.LastAutoFetchAt = time.Now().Format(time.RFC3339)
+	p.NextAutoFetchAt = time.Now().Add(interval).Format(time.RFC3339)
+	if err != nil {
+		p.LastAutoFetchError = err.Error()
+	} else {
+		p.LastAutoFetchError = ""
+	}
+	cfg.Profiles[name] = normalizeProfile(name, p)
+	_ = m.SaveConfig(cfg)
 }
 
 func (m *Manager) ProfilePath(name string) string {
@@ -395,6 +521,9 @@ func normalizeProfile(name string, p Profile) Profile {
 	if p.Name == "" {
 		p.Name = name
 	}
+	if strings.TrimSpace(p.AutoFetchInterval) == "" {
+		p.AutoFetchInterval = "6h"
+	}
 	if p.FetchCount < 1 {
 		p.FetchCount = 200
 	}
@@ -402,6 +531,21 @@ func normalizeProfile(name string, p Profile) Profile {
 		p.FetchCount = 10000
 	}
 	return p
+}
+
+func parseAutoFetchInterval(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "6h"
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("定时获取间隔格式无效，请使用 30m、6h、24h 等格式")
+	}
+	if parsed < time.Minute {
+		return 0, fmt.Errorf("定时获取间隔不能小于 1m")
+	}
+	return parsed, nil
 }
 
 func BuildQuery(p Profile) string {

@@ -27,6 +27,7 @@
 - Web 面板使用獨立的用戶名與密碼，與 SSH 菜單管理密碼互不干涉；敏感設定預設折疊，避免誤觸。
 - Web 介面預設繁體中文，右上角可切換繁體中文、簡體中文或英文，登出按鈕與語言切換集中放置。
 - 內建 Shodan IP Panel：支援多配置、Shodan API 查詢、IP 結果保存與下載連結開關。
+- Shodan IP Panel 支援每個配置獨立開啟「定時獲取最新資料」，可自訂間隔並顯示上次/下次自動獲取時間。
 - Shodan 區塊採用折疊式配置目錄，新增配置會以彈窗方式填寫，刪除配置按鈕放在新增配置旁，配置狀態、下載和修改設定預設折疊管理。
 - Shodan 配置狀態按目前選中的 profile 顯示，切換到新配置時不會沿用其他配置的成功時間或 IP 數量；獲取成功後會以配置名生成 `<配置名>.txt`，並在 Web 配置狀態中顯示 VPS 本地文件路徑，可直接填入 `ip_sources`。
 - 支援 Linux amd64、arm64 和 386。
@@ -46,10 +47,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.3.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.3/cfnat-linux-v0.17.3.tar.gz
+curl -fL -o cfnat-linux-v0.17.4.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.4/cfnat-linux-v0.17.4.tar.gz
 
-tar -xzf cfnat-linux-v0.17.3.tar.gz
+tar -xzf cfnat-linux-v0.17.4.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -122,6 +123,7 @@ Web 面板目前可管理：
 - 折疊顯示 Cloudflare Zone ID、DNS 域名、Web 帳密、Shodan API Key 等敏感設定；
 - 啟用/停用 Shodan IP Panel；
 - 管理 Shodan 多配置、API Key、查詢條件、抓取數量；
+- 在 Shodan 配置中為目前 profile 設定定時獲取最新資料的開關與間隔；
 - 執行 Shodan 查詢並下載生成的 IP 檔案。
 - 透過右上角「新增配置」彈窗建立 Shodan 配置；刪除配置按鈕放在新增配置旁，配置狀態、下載開關、下載連結與修改配置收納在折疊目錄中。
 
@@ -284,7 +286,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.3
+make release VERSION=v0.17.4
 ```
 
 ## 命令列
