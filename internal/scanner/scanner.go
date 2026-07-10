@@ -71,7 +71,13 @@ func (s *Scanner) ScanProgress(ctx context.Context, onProgress ProgressFunc) ([]
 	if err != nil {
 		return nil, err
 	}
-	s.logger.Info("开始扫描", "prefixes", len(prefixes), "candidates", len(candidates), "tcp_concurrency", s.cfg.Concurrency)
+	beforeBlacklist := len(candidates)
+	candidates = filterBlacklist(candidates, s.cfg.IPBlacklist)
+	blacklisted := beforeBlacklist - len(candidates)
+	if len(candidates) == 0 {
+		return nil, errors.New("候选 IP 均被 ip_blacklist 排除")
+	}
+	s.logger.Info("开始扫描", "prefixes", len(prefixes), "candidates", len(candidates), "blacklisted", blacklisted, "tcp_concurrency", s.cfg.Concurrency)
 	ranked, tcpFailures := s.rankTCP(ctx, candidates)
 	if len(ranked) == 0 {
 		return nil, fmt.Errorf("没有可建立 TCP 连接的候选 IP（失败统计: %s）", formatCounts(tcpFailures))
@@ -686,6 +692,48 @@ func mergeCounts(dst, src map[string]int) {
 	for key, value := range src {
 		dst[key] += value
 	}
+}
+
+func filterBlacklist(candidates []netip.Addr, blacklist []string) []netip.Addr {
+	if len(candidates) == 0 || len(blacklist) == 0 {
+		return candidates
+	}
+	blockedIPs := make(map[netip.Addr]struct{})
+	blockedPrefixes := []netip.Prefix{}
+	for _, item := range blacklist {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			prefix, err := netip.ParsePrefix(item)
+			if err == nil {
+				blockedPrefixes = append(blockedPrefixes, prefix.Masked())
+			}
+			continue
+		}
+		ip, err := netip.ParseAddr(item)
+		if err == nil {
+			blockedIPs[ip] = struct{}{}
+		}
+	}
+	filtered := candidates[:0]
+	for _, ip := range candidates {
+		if _, ok := blockedIPs[ip]; ok {
+			continue
+		}
+		blocked := false
+		for _, prefix := range blockedPrefixes {
+			if prefix.Contains(ip) {
+				blocked = true
+				break
+			}
+		}
+		if !blocked {
+			filtered = append(filtered, ip)
+		}
+	}
+	return filtered
 }
 
 func generateCandidates(prefixes []netip.Prefix, random bool, limit int) ([]netip.Addr, error) {

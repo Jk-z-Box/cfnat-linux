@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"html/template"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,12 @@ func TestPrintStatusIncludesOperationalDetails(t *testing.T) {
 		if !strings.Contains(output.String(), wanted) {
 			t.Fatalf("status output missing %q:\n%s", wanted, output.String())
 		}
+	}
+}
+
+func TestPanelTemplateParses(t *testing.T) {
+	if _, err := template.New("panel").Funcs(template.FuncMap{"join": strings.Join}).Parse(panelHTML); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -133,6 +140,18 @@ func TestSelectProgressPoolMergesNewValidWithCurrentHealthy(t *testing.T) {
 	}
 	pool := selectProgressPool(current, scanned, 4)
 	assertIPs(t, pool, "192.0.2.20", "192.0.2.1", "192.0.2.21", "192.0.2.2")
+}
+
+func TestRecoveryPoolSwapKeepsFastestTargets(t *testing.T) {
+	current := []scanner.Result{
+		result("192.0.2.1", 80),
+		result("192.0.2.2", 90),
+		result("192.0.2.3", 200),
+	}
+	recovered := result("192.0.2.9", 70)
+	pool, recovery := swapRecoveredForWorst(current, []scanner.Result{recovered}, 3)
+	assertIPs(t, pool, "192.0.2.9", "192.0.2.1", "192.0.2.2")
+	assertIPs(t, recovery, "192.0.2.3")
 }
 
 func TestShodanSummaryUsesActiveProfileState(t *testing.T) {

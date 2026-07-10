@@ -37,6 +37,18 @@ func TestGenerateCandidatesInsidePrefix(t *testing.T) {
 	}
 }
 
+func TestFilterBlacklistRemovesIPsAndCIDRs(t *testing.T) {
+	candidates := []netip.Addr{
+		netip.MustParseAddr("192.0.2.1"),
+		netip.MustParseAddr("192.0.2.2"),
+		netip.MustParseAddr("198.51.100.1"),
+	}
+	filtered := filterBlacklist(candidates, []string{"192.0.2.1", "198.51.100.0/24"})
+	if len(filtered) != 1 || filtered[0] != netip.MustParseAddr("192.0.2.2") {
+		t.Fatalf("filtered = %v", filtered)
+	}
+}
+
 func TestTraceValue(t *testing.T) {
 	if got := traceValue("ip=1.2.3.4\ncolo=HKG\n", "colo"); got != "HKG" {
 		t.Fatalf("got %q", got)

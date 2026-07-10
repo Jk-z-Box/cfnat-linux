@@ -77,6 +77,7 @@ type RuntimeState struct {
 	DailyScan  DailyScanState `json:"daily_scan"`
 	Scan       ScanState      `json:"scan"`
 	Targets    []TargetState  `json:"targets,omitempty"`
+	Recovery   []TargetState  `json:"recovery,omitempty"`
 	DNS        DNSState       `json:"dns"`
 	Update     UpdateState    `json:"update"`
 }
@@ -95,9 +96,13 @@ type App struct {
 	eventCond  *sync.Cond
 	eventSeq   uint64
 	pool       []scanner.Result
+	recovery   []scanner.Result
 	failures   map[netip.Addr]int
+	scanPaused bool
 	state      RuntimeState
 }
+
+var errScanPaused = errors.New("scan paused")
 
 func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version, configPath string) *App {
 	state := RuntimeState{
@@ -195,6 +200,9 @@ func (a *App) maintain(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-scanC:
+			if a.scansPaused() {
+				continue
+			}
 			if err := a.rescan(ctx, "scheduled"); err != nil {
 				if !errors.Is(err, errScanInProgress) {
 					a.logger.Error("定时扫描失败，继续使用原池", "error", err)
@@ -211,6 +219,9 @@ func (a *App) maintain(ctx context.Context) {
 				continue
 			}
 			if empty {
+				if a.scansPaused() {
+					continue
+				}
 				if err := a.rescan(ctx, "retry"); err != nil {
 					if !errors.Is(err, errScanInProgress) {
 						a.logger.Error("后台重试失败", "error", err)
@@ -226,10 +237,17 @@ func (a *App) maintain(ctx context.Context) {
 				continue
 			}
 			status := a.checkAndPrunePool(ctx)
+			recoveryStatus := a.checkRecoveryPool(ctx)
+			if recoveryStatus.dnsNeedsSync {
+				status.dnsNeedsSync = true
+			}
 			if status.dnsNeedsSync {
 				a.syncDNS(ctx)
 			}
 			if status.healthyCount < a.cfg.MinHealthyCount {
+				if a.scansPaused() {
+					continue
+				}
 				a.logger.Warn("健康 IP 数低于阈值，触发整池重选", "healthy", status.healthyCount, "min_healthy_count", a.cfg.MinHealthyCount)
 				if err := a.rescan(ctx, "health"); err != nil {
 					if !errors.Is(err, errScanInProgress) {
@@ -277,6 +295,10 @@ func (a *App) checkUpdate(ctx context.Context) {
 }
 
 func (a *App) rescan(ctx context.Context, reason string) error {
+	if a.scansPaused() {
+		a.logger.Info("跳过优选，扫描已暂停", "reason", reason)
+		return errScanPaused
+	}
 	if !a.scanMu.TryLock() {
 		a.logger.Debug("跳过优选，已有扫描正在进行", "reason", reason)
 		return errScanInProgress
@@ -285,6 +307,10 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	a.logger.Info("触发优选", "reason", reason, "max_latency", a.cfg.MaxLatency.Value())
 	now := time.Now().UTC()
 	a.mu.Lock()
+	if reason == "web" {
+		a.recovery = nil
+		a.state.Recovery = nil
+	}
 	a.incrementDailyScanLocked(now)
 	a.state.Status = "scanning"
 	a.state.Scan = ScanState{InProgress: true, Completed: false, Reason: reason, StartedAt: &now}
@@ -375,6 +401,21 @@ func (a *App) applyScanProgress(reason string, results []scanner.Result) {
 	a.proxy.Update(pool)
 	a.logger.Info("分批扫描已有合格 IP，已热更新转发池", "reason", reason, "valid", len(results), "targets", len(pool), "primary_ip", pool[0].IP.String())
 	a.saveState()
+}
+
+func (a *App) scansPaused() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.scanPaused
+}
+
+func (a *App) ToggleScanPause() bool {
+	a.mu.Lock()
+	a.scanPaused = !a.scanPaused
+	paused := a.scanPaused
+	a.mu.Unlock()
+	a.saveState()
+	return paused
 }
 
 func (a *App) currentHealthyPoolLocked() []scanner.Result {
@@ -474,6 +515,46 @@ func selectProgressPool(currentHealthy, scanned []scanner.Result, size int) []sc
 	return merged
 }
 
+func swapRecoveredForWorst(pool, recovered []scanner.Result, size int) ([]scanner.Result, []scanner.Result) {
+	pool = uniqueResults(pool)
+	recovered = uniqueResults(recovered)
+	sortResults(pool)
+	sortResults(recovered)
+	recovery := []scanner.Result{}
+	for _, candidate := range recovered {
+		inPool := false
+		for i, current := range pool {
+			if current.IP == candidate.IP {
+				pool[i] = candidate
+				inPool = true
+				break
+			}
+		}
+		if inPool {
+			continue
+		}
+		if len(pool) < size {
+			pool = append(pool, candidate)
+			continue
+		}
+		if len(pool) == 0 {
+			recovery = append(recovery, candidate)
+			continue
+		}
+		sortResults(pool)
+		worst := pool[len(pool)-1]
+		if candidate.LatencyMS < worst.LatencyMS {
+			pool[len(pool)-1] = candidate
+			recovery = append(recovery, worst)
+		} else {
+			recovery = append(recovery, candidate)
+		}
+	}
+	sortResults(pool)
+	sortResults(recovery)
+	return pool, recovery
+}
+
 func uniqueResults(results []scanner.Result) []scanner.Result {
 	seen := make(map[netip.Addr]struct{}, len(results))
 	unique := make([]scanner.Result, 0, len(results))
@@ -566,6 +647,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	for _, result := range a.pool {
 		if _, drop := removed[result.IP]; drop {
 			delete(a.failures, result.IP)
+			a.addRecoveryLocked(result)
 			continue
 		}
 		if checked, ok := checkedByIP[result.IP]; ok {
@@ -595,6 +677,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	}
 	a.pool = newPool
 	a.state.Targets = mergeTargetStates(newPool, a.state.Targets)
+	a.state.Recovery = targetStatesFromResults(a.recovery, "recovering")
 	a.state.PrimaryIP = ""
 	if len(newPool) > 0 {
 		a.state.PrimaryIP = newPool[0].IP.String()
@@ -612,7 +695,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 		a.proxy.Update(pool)
 	}
 	if len(removed) > 0 {
-		a.logger.Warn("不健康 IP 已从转发池剔除", "removed", len(removed), "remaining", len(pool))
+		a.logger.Warn("不健康 IP 已从转发池剔除并进入冷却恢复池", "removed", len(removed), "remaining", len(pool), "recovery", len(a.recoverySnapshot()))
 	}
 	if reordered {
 		a.logger.Info("转发池已按最新延迟重新排序", "primary_ip", valueOr(a.primaryIP(pool), "暂无"))
@@ -643,6 +726,118 @@ func mergeTargetStates(results []scanner.Result, existing []TargetState) []Targe
 		targets = append(targets, target)
 	}
 	return targets
+}
+
+func targetStatesFromResults(results []scanner.Result, status string) []TargetState {
+	targets := make([]TargetState, 0, len(results))
+	for _, result := range results {
+		targets = append(targets, TargetState{IP: result.IP, LatencyMS: result.LatencyMS, SpeedMBps: result.SpeedMBps, Colo: result.Colo, Status: status, CheckedAt: result.CheckedAt})
+	}
+	return targets
+}
+
+func (a *App) addRecoveryLocked(result scanner.Result) {
+	for i, existing := range a.recovery {
+		if existing.IP == result.IP {
+			a.recovery[i] = result
+			sortResults(a.recovery)
+			return
+		}
+	}
+	a.recovery = append(a.recovery, result)
+	sortResults(a.recovery)
+}
+
+func (a *App) recoverySnapshot() []scanner.Result {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]scanner.Result(nil), a.recovery...)
+}
+
+func (a *App) checkRecoveryPool(ctx context.Context) healthStatus {
+	a.mu.Lock()
+	recovery := append([]scanner.Result(nil), a.recovery...)
+	a.mu.Unlock()
+	if len(recovery) == 0 {
+		return healthStatus{allHealthy: true}
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, a.cfg.DialTimeout.Value()*time.Duration(len(recovery)+1))
+	defer cancel()
+	recovered := make([]scanner.Result, 0, len(recovery))
+	for _, result := range recovery {
+		checked, err := a.scanner.Probe(checkCtx, result.IP)
+		if err != nil {
+			continue
+		}
+		recovered = append(recovered, checked)
+	}
+	if len(recovered) == 0 {
+		return healthStatus{allHealthy: false, healthyCount: len(recovery)}
+	}
+	sortResults(recovered)
+	a.mu.Lock()
+	oldSyncedIPs := append([]string(nil), a.state.DNS.SyncedIPs...)
+	oldDesired := a.desiredDNSIPsLocked()
+	changed := false
+	for _, candidate := range recovered {
+		poolIndex := -1
+		for i, current := range a.pool {
+			if current.IP == candidate.IP {
+				poolIndex = i
+				break
+			}
+		}
+		if poolIndex >= 0 {
+			a.pool[poolIndex] = candidate
+			a.removeRecoveryLocked(candidate.IP)
+			changed = true
+			continue
+		}
+		if len(a.pool) < a.cfg.PoolSize {
+			a.pool = append(a.pool, candidate)
+			a.removeRecoveryLocked(candidate.IP)
+			changed = true
+			continue
+		}
+		if len(a.pool) == 0 {
+			continue
+		}
+		sortResults(a.pool)
+		worst := a.pool[len(a.pool)-1]
+		if candidate.LatencyMS < worst.LatencyMS {
+			a.pool[len(a.pool)-1] = candidate
+			a.removeRecoveryLocked(candidate.IP)
+			a.addRecoveryLocked(worst)
+			changed = true
+		}
+	}
+	if changed {
+		sortResults(a.pool)
+		a.state.Targets = mergeTargetStates(a.pool, a.state.Targets)
+		a.state.Recovery = targetStatesFromResults(a.recovery, "recovering")
+		a.state.PrimaryIP = valueOr(a.primaryIP(a.pool), "")
+		a.state.Status = "running"
+	}
+	pool := append([]scanner.Result(nil), a.pool...)
+	newDesired := a.desiredDNSIPsLocked()
+	dnsNeedsSync := changed && !sameStrings(oldDesired, newDesired) && a.shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, newDesired, map[netip.Addr]struct{}{}, time.Now())
+	a.mu.Unlock()
+	if changed {
+		a.proxy.Update(pool)
+		a.logger.Info("冷却恢复池 IP 恢复健康并参与排序", "recovered", len(recovered), "targets", len(pool), "primary_ip", valueOr(a.primaryIP(pool), "暂无"))
+		a.saveState()
+	}
+	return healthStatus{allHealthy: !changed, dnsNeedsSync: dnsNeedsSync, healthyCount: len(pool), reordered: changed}
+}
+
+func (a *App) removeRecoveryLocked(ip netip.Addr) {
+	filtered := a.recovery[:0]
+	for _, result := range a.recovery {
+		if result.IP != ip {
+			filtered = append(filtered, result)
+		}
+	}
+	a.recovery = filtered
 }
 
 func (a *App) desiredDNSIPsLocked() []string {

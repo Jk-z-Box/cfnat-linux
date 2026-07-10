@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -86,6 +87,7 @@ type Config struct {
 	Listen                 string           `json:"listen"`
 	IPVersion              int              `json:"ip_version"`
 	IPSources              []string         `json:"ip_sources"`
+	IPBlacklist            []string         `json:"ip_blacklist"`
 	RandomIPs              bool             `json:"random_ips"`
 	MaxCandidates          int              `json:"max_candidates"`
 	ValidIPCount           int              `json:"valid_ip_count"`
@@ -123,6 +125,7 @@ func Defaults() Config {
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
+		IPBlacklist:            []string{},
 		RandomIPs:              true,
 		MaxCandidates:          2000,
 		ValidIPCount:           20,
@@ -195,6 +198,10 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["source_cache_dir"]; !ok {
 		raw["source_cache_dir"] = "/var/lib/cfnat/ip-cache"
+		changed = true
+	}
+	if _, ok := raw["ip_blacklist"]; !ok {
+		raw["ip_blacklist"] = []any{}
 		changed = true
 	}
 	if _, ok := raw["min_healthy_count"]; !ok {
@@ -314,6 +321,14 @@ func Set(path, key, value string) error {
 			}
 		}
 		cfg.IPSources = sources
+	case "ip_blacklist":
+		cfg.IPBlacklist = splitNonEmptyLines(value)
+	case "max_candidates":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("max_candidates 必须是整数")
+		}
+		cfg.MaxCandidates = parsed
 	case "max_latency":
 		parsed, err := time.ParseDuration(value)
 		if err != nil {
@@ -440,6 +455,17 @@ func Set(path, key, value string) error {
 	return os.WriteFile(path, data, info.Mode().Perm())
 }
 
+func splitNonEmptyLines(value string) []string {
+	items := []string{}
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			items = append(items, line)
+		}
+	}
+	return items
+}
+
 func (c *Config) Validate() error {
 	if c.Listen == "" {
 		return errors.New("listen 不能为空")
@@ -457,6 +483,11 @@ func (c *Config) Validate() error {
 	}
 	if len(c.IPSources) == 0 {
 		return errors.New("ip_sources 至少需要一个来源")
+	}
+	for _, item := range c.IPBlacklist {
+		if _, err := netipOrPrefix(item); err != nil {
+			return fmt.Errorf("ip_blacklist 包含无效 IP 或 CIDR: %q", item)
+		}
 	}
 	if c.MaxCandidates < 1 || c.Concurrency < 1 || c.ValidIPCount < 1 || c.PoolSize < 1 || c.MinHealthyCount < 1 {
 		return errors.New("候选数、并发数、有效 IP 数、池大小和最小健康 IP 数必须大于 0")
@@ -578,4 +609,13 @@ func validRecordName(name string) bool {
 		}
 	}
 	return true
+}
+
+func netipOrPrefix(value string) (bool, error) {
+	if strings.Contains(value, "/") {
+		_, err := netip.ParsePrefix(value)
+		return true, err
+	}
+	_, err := netip.ParseAddr(value)
+	return false, err
 }

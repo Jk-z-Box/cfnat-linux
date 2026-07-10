@@ -5,6 +5,7 @@
   "ip_sources": [
     "https://www.cloudflare.com/ips-v4"
   ],
+  "ip_blacklist": [],
   "random_ips": true,
   "max_candidates": 2000,
   "valid_ip_count": 20,
