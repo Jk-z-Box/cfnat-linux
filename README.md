@@ -11,6 +11,7 @@
 - 可透過 `/cdn-cgi/trace` 依 Cloudflare `colo` 篩選資料中心。
 - 維護低延遲目標池，依最新延遲排序；掃描過程中每批通過複篩的 IP 會先合併進健康池並熱更新轉發，新連線始終優先連線目前延遲最低的 IP，失敗時再依序 fallback。
 - 預設每 2 秒監控一次池內 IP 延遲，可自訂監控間隔並熱更新轉發順序。
+- 延遲監控造成的純排序變化只寫入 debug 日誌，避免正常運行時 journal 被每分鐘重排訊息刷屏。
 - 定期健康檢查；單個 IP 連續失敗後會先從轉發池剔除並放入冷卻恢復池，剩餘健康 IP 繼續轉發。
 - 當健康 IP 少於自訂門檻時，背景觸發整池重選；若新掃描池最佳延遲低於目前健康池，整池熱替換；若新掃描池較慢，保留目前健康 IP，並從新掃描結果中按延遲補齊到目標池大小。健康重選不會清空冷卻恢復池；恢復池內 IP 若恢復健康且延遲低於池內最慢 IP，會重新參與排序並替換最慢 IP。
 - 將前 N 個優選 IP 同步為 Cloudflare `A` 或 `AAAA` 記錄。
@@ -45,10 +46,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.2.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.2/cfnat-linux-v0.17.2.tar.gz
+curl -fL -o cfnat-linux-v0.17.3.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.3/cfnat-linux-v0.17.3.tar.gz
 
-tar -xzf cfnat-linux-v0.17.2.tar.gz
+tar -xzf cfnat-linux-v0.17.3.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -283,7 +284,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.2
+make release VERSION=v0.17.3
 ```
 
 ## 命令列

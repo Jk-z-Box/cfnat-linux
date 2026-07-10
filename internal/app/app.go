@@ -256,7 +256,7 @@ func (a *App) maintain(ctx context.Context) {
 				}
 				continue
 			}
-			if status.allHealthy {
+			if status.allHealthy || status.removed == 0 {
 				continue
 			}
 			a.logger.Warn("目标池健康检查发现异常 IP，已保留健康 IP 继续转发", "healthy", status.healthyCount, "removed", status.removed)
@@ -698,7 +698,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 		a.logger.Warn("不健康 IP 已从转发池剔除并进入冷却恢复池", "removed", len(removed), "remaining", len(pool), "recovery", len(a.recoverySnapshot()))
 	}
 	if reordered {
-		a.logger.Info("转发池已按最新延迟重新排序", "primary_ip", valueOr(a.primaryIP(pool), "暂无"))
+		a.logger.Debug("转发池已按最新延迟重新排序", "primary_ip", valueOr(a.primaryIP(pool), "暂无"))
 	}
 	a.saveState()
 	return healthStatus{allHealthy: allHealthy && len(removed) == 0, dnsNeedsSync: dnsNeedsSync, healthyCount: healthyCount, removed: len(removed), reordered: reordered}

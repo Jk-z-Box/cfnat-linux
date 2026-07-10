@@ -32,7 +32,7 @@ func New(listen string, targetPort int, timeout time.Duration, logger *slog.Logg
 func (s *Server) Update(results []scanner.Result) {
 	copyOf := append([]scanner.Result(nil), results...)
 	s.pool.Store(copyOf)
-	s.logger.Info("转发池已更新", "targets", len(copyOf))
+	s.logger.Debug("转发池已更新", "targets", len(copyOf))
 }
 
 func (s *Server) Enabled() bool {
