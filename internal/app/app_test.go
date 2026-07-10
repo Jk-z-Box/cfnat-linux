@@ -182,6 +182,18 @@ func TestRecoveryPoolSwapKeepsFastestTargets(t *testing.T) {
 	assertIPs(t, recovery, "192.0.2.3")
 }
 
+func TestFilterRecoveryResultsExcludesCoolingIPs(t *testing.T) {
+	cfg := config.Defaults()
+	app := New(cfg, nil, nil, "v0.17.11", "")
+	app.recovery = []scanner.Result{result("192.0.2.2", 90)}
+	filtered := app.filterRecoveryResults([]scanner.Result{
+		result("192.0.2.1", 80),
+		result("192.0.2.2", 90),
+		result("192.0.2.3", 100),
+	})
+	assertIPs(t, filtered, "192.0.2.1", "192.0.2.3")
+}
+
 func TestShodanSummaryUsesActiveProfileState(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Defaults()

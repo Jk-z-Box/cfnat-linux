@@ -13,7 +13,7 @@
 - 預設每 2 秒監控一次池內 IP 延遲，可自訂監控間隔並熱更新轉發順序。
 - 延遲監控造成的純排序變化只寫入 debug 日誌，避免正常運行時 journal 被每分鐘重排訊息刷屏。
 - 定期健康檢查；單個 IP 連續失敗後會先從轉發池剔除並放入冷卻恢復池，剩餘健康 IP 繼續轉發。
-- 當健康 IP 少於自訂門檻時，背景觸發整池重選；若新掃描池最佳延遲低於目前健康池，整池熱替換；若新掃描池較慢，保留目前健康 IP，並從新掃描結果中按延遲補齊到目標池大小。健康重選不會清空冷卻恢復池；恢復池內 IP 若恢復健康且延遲低於池內最慢 IP，會重新參與排序並替換最慢 IP。
+- 當健康 IP 少於自訂門檻時，背景觸發整池重選；若新掃描池最佳延遲低於目前健康池，整池熱替換；若新掃描池較慢，保留目前健康 IP，並從新掃描結果中按延遲補齊到目標池大小。健康重選不會清空冷卻恢復池；自動掃描和分批復篩結果會過濾仍在冷卻恢復池中的 IP，避免繞過冷卻直接回池。恢復池內 IP 若恢復健康且延遲低於池內最慢 IP，會重新參與排序並替換最慢 IP。
 - 將前 N 個優選 IP 同步為 Cloudflare `A` 或 `AAAA` 記錄。
 - 若已同步到 Cloudflare 的 IP 被判定不健康並剔除，會自動把健康 IP 池重新同步到 DNS。
 - DNS 不會預設跟隨 2 秒延遲排序同步；可選擇開啟「延遲排序冷卻同步」，按自訂冷卻時間低頻更新。
@@ -25,6 +25,7 @@
 - 管理面板可選啟用管理密碼，支援開關與修改；配置只保存 SHA-256 雜湊，不保存明文。
 - 定時檢查 GitHub Release；有新版本時顯示在狀態面板，並可選擇啟用 systemd timer 背景自動更新。
 - 冷卻恢復池加入恢復冷卻時間與連續成功門檻，避免抖動 IP 被剔除後立刻回池造成反覆刷屏。
+- 健康 IP 不足但已有掃描正在進行時，僅以 debug 記錄跳過重複重選，避免 warning 日誌過於吵雜。
 - Web「配置文件修改」使用 `/var/lib/cfnat` 生成臨時校驗文件，避免低權限服務在 `/etc/cfnat` 目錄建立臨時文件時出現 permission denied。
 - Web 管理面板新安裝時預設啟用，並優先於 TCP 轉發與初始掃描啟動；透過瀏覽器查看 cfnat 與 Shodan 統一狀態摘要、保存常用配置、管理 `ip_sources` IP 來源與 IP 黑名單、暫停/恢復 TCP 轉發、暫停/恢復掃描、觸發重掃或透過 /var/lib/cfnat/restart-request 與 cfnat-web-restart.path 重啟進程；狀態透過 Server-Sent Events 實時推送，不依賴定時輪詢。內建掃描互斥保護，避免 startup、retry、scheduled、health 或 Web 手動重掃同時執行造成重複掃描與重複 DNS 同步；自動 retry 會在掃描進行中靜默等待，避免刷屏日誌。
 - Web 面板使用獨立的用戶名與密碼，與 SSH 菜單管理密碼互不干涉；敏感設定預設折疊，避免誤觸。
@@ -50,10 +51,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.11.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.11/cfnat-linux-v0.17.11.tar.gz
+curl -fL -o cfnat-linux-v0.17.12.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.12/cfnat-linux-v0.17.12.tar.gz
 
-tar -xzf cfnat-linux-v0.17.11.tar.gz
+tar -xzf cfnat-linux-v0.17.12.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -291,7 +292,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.11
+make release VERSION=v0.17.12
 ```
 
 ## 命令列

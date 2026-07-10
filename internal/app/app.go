@@ -259,6 +259,13 @@ func (a *App) maintain(ctx context.Context) {
 				if a.scansPaused() {
 					continue
 				}
+				a.mu.Lock()
+				scanning := a.state.Scan.InProgress
+				a.mu.Unlock()
+				if scanning {
+					a.logger.Debug("健康 IP 数低于阈值，但已有扫描正在进行，跳过重复重选", "healthy", status.healthyCount, "min_healthy_count", a.cfg.MinHealthyCount)
+					continue
+				}
 				a.logger.Warn("健康 IP 数低于阈值，触发整池重选", "healthy", status.healthyCount, "min_healthy_count", a.cfg.MinHealthyCount)
 				if err := a.rescan(ctx, "health"); err != nil {
 					if !errors.Is(err, errScanInProgress) {
@@ -347,6 +354,21 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 		a.saveState()
 		return err
 	}
+	results = a.filterRecoveryResults(results)
+	if len(results) == 0 {
+		err := errors.New("扫描结果均在冷却恢复池中，等待冷却后再参与转发")
+		a.mu.Lock()
+		a.state.Scan.InProgress = false
+		a.state.Scan.LastError = err.Error()
+		if len(a.pool) > 0 {
+			a.state.Status = "degraded"
+		} else {
+			a.state.Status = "error"
+		}
+		a.mu.Unlock()
+		a.saveState()
+		return err
+	}
 	if len(results) < a.cfg.PoolSize {
 		a.logger.Warn("有效 IP 少于目标池大小", "valid", len(results), "wanted", a.cfg.PoolSize)
 	}
@@ -388,6 +410,7 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 }
 
 func (a *App) applyScanProgress(reason string, results []scanner.Result) {
+	results = a.filterRecoveryResults(results)
 	if len(results) == 0 {
 		return
 	}
@@ -455,6 +478,29 @@ func (a *App) currentHealthyPoolLocked() []scanner.Result {
 	}
 	sortResults(pool)
 	return pool
+}
+
+func (a *App) filterRecoveryResults(results []scanner.Result) []scanner.Result {
+	if len(results) == 0 {
+		return nil
+	}
+	a.mu.Lock()
+	recovering := make(map[netip.Addr]struct{}, len(a.recovery))
+	for _, result := range a.recovery {
+		recovering[result.IP] = struct{}{}
+	}
+	a.mu.Unlock()
+	if len(recovering) == 0 {
+		return results
+	}
+	filtered := make([]scanner.Result, 0, len(results))
+	for _, result := range results {
+		if _, ok := recovering[result.IP]; ok {
+			continue
+		}
+		filtered = append(filtered, result)
+	}
+	return filtered
 }
 
 func selectPoolAfterScan(reason string, currentHealthy, scanned []scanner.Result, size int) ([]scanner.Result, string) {
