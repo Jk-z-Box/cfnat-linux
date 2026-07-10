@@ -375,6 +375,8 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "latency_monitor_interval": "${LATENCY_MONITOR_INTERVAL}",
   "health_interval": "60s",
   "health_failures": 3,
+  "recovery_cooldown": "5m",
+  "recovery_successes": 2,
   "state_file": "/var/lib/cfnat/state.json",
   "source_cache_dir": "/var/lib/cfnat/ip-cache",
   "log_level": "info",

@@ -89,6 +89,12 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.Shodan.Enabled {
 		t.Fatal("expected shodan panel to be disabled after migration")
 	}
+	if cfg.RecoveryCooldown.Value() == 0 {
+		t.Fatal("expected recovery cooldown after migration")
+	}
+	if cfg.RecoverySuccesses != 2 {
+		t.Fatalf("recovery successes = %d", cfg.RecoverySuccesses)
+	}
 }
 
 func TestDNSRecordTypeAuto(t *testing.T) {
@@ -148,6 +154,19 @@ func TestRejectInvalidDNSLatencySyncInterval(t *testing.T) {
 	cfg.DNS.LatencySyncInterval = Duration(0)
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected latency sync interval validation error")
+	}
+}
+
+func TestRejectInvalidRecoverySettings(t *testing.T) {
+	cfg := Defaults()
+	cfg.RecoveryCooldown = Duration(0)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected recovery cooldown validation error")
+	}
+	cfg = Defaults()
+	cfg.RecoverySuccesses = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected recovery successes validation error")
 	}
 }
 

@@ -97,6 +97,8 @@ type App struct {
 	eventSeq   uint64
 	pool       []scanner.Result
 	recovery   []scanner.Result
+	recoveryAt map[netip.Addr]time.Time
+	recoveryOK map[netip.Addr]int
 	failures   map[netip.Addr]int
 	scanPaused bool
 	state      RuntimeState
@@ -129,6 +131,8 @@ func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version, co
 		dns:        cloudflare.New(cfg.DNS),
 		version:    version,
 		configPath: configPath,
+		recoveryAt: make(map[netip.Addr]time.Time),
+		recoveryOK: make(map[netip.Addr]int),
 		failures:   make(map[netip.Addr]int),
 		state:      state,
 	}
@@ -316,6 +320,8 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	a.mu.Lock()
 	if reason == "web" {
 		a.recovery = nil
+		a.recoveryAt = make(map[netip.Addr]time.Time)
+		a.recoveryOK = make(map[netip.Addr]int)
 		a.state.Recovery = nil
 	}
 	a.incrementDailyScanLocked(now)
@@ -749,14 +755,21 @@ func targetStatesFromResults(results []scanner.Result, status string) []TargetSt
 }
 
 func (a *App) addRecoveryLocked(result scanner.Result) {
+	now := time.Now().UTC()
 	for i, existing := range a.recovery {
 		if existing.IP == result.IP {
 			a.recovery[i] = result
+			if _, ok := a.recoveryAt[result.IP]; !ok {
+				a.recoveryAt[result.IP] = now
+			}
+			a.recoveryOK[result.IP] = 0
 			sortResults(a.recovery)
 			return
 		}
 	}
 	a.recovery = append(a.recovery, result)
+	a.recoveryAt[result.IP] = now
+	a.recoveryOK[result.IP] = 0
 	sortResults(a.recovery)
 }
 
@@ -769,16 +782,38 @@ func (a *App) recoverySnapshot() []scanner.Result {
 func (a *App) checkRecoveryPool(ctx context.Context) healthStatus {
 	a.mu.Lock()
 	recovery := append([]scanner.Result(nil), a.recovery...)
+	recoveryAt := make(map[netip.Addr]time.Time, len(a.recoveryAt))
+	recoveryOK := make(map[netip.Addr]int, len(a.recoveryOK))
+	for ip, at := range a.recoveryAt {
+		recoveryAt[ip] = at
+	}
+	for ip, okCount := range a.recoveryOK {
+		recoveryOK[ip] = okCount
+	}
 	a.mu.Unlock()
 	if len(recovery) == 0 {
 		return healthStatus{allHealthy: true}
 	}
+	now := time.Now().UTC()
 	checkCtx, cancel := context.WithTimeout(ctx, a.cfg.DialTimeout.Value()*time.Duration(len(recovery)+1))
 	defer cancel()
 	recovered := make([]scanner.Result, 0, len(recovery))
 	for _, result := range recovery {
+		if at, ok := recoveryAt[result.IP]; ok && now.Sub(at) < a.cfg.RecoveryCooldown.Value() {
+			continue
+		}
 		checked, err := a.scanner.Probe(checkCtx, result.IP)
 		if err != nil {
+			a.mu.Lock()
+			a.recoveryOK[result.IP] = 0
+			a.mu.Unlock()
+			continue
+		}
+		successes := recoveryOK[result.IP] + 1
+		a.mu.Lock()
+		a.recoveryOK[result.IP] = successes
+		a.mu.Unlock()
+		if successes < a.cfg.RecoverySuccesses {
 			continue
 		}
 		recovered = append(recovered, checked)
@@ -850,6 +885,8 @@ func (a *App) removeRecoveryLocked(ip netip.Addr) {
 		}
 	}
 	a.recovery = filtered
+	delete(a.recoveryAt, ip)
+	delete(a.recoveryOK, ip)
 }
 
 func (a *App) desiredDNSIPsLocked() []string {

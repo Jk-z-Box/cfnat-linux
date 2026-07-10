@@ -108,6 +108,8 @@ type Config struct {
 	LatencyMonitorInterval Duration         `json:"latency_monitor_interval"`
 	HealthInterval         Duration         `json:"health_interval"`
 	HealthFailures         int              `json:"health_failures"`
+	RecoveryCooldown       Duration         `json:"recovery_cooldown"`
+	RecoverySuccesses      int              `json:"recovery_successes"`
 	StateFile              string           `json:"state_file"`
 	SourceCacheDir         string           `json:"source_cache_dir"`
 	LogLevel               string           `json:"log_level"`
@@ -143,6 +145,8 @@ func Defaults() Config {
 		LatencyMonitorInterval: Duration(2 * time.Second),
 		HealthInterval:         Duration(60 * time.Second),
 		HealthFailures:         3,
+		RecoveryCooldown:       Duration(5 * time.Minute),
+		RecoverySuccesses:      2,
 		StateFile:              "/var/lib/cfnat/state.json",
 		SourceCacheDir:         "/var/lib/cfnat/ip-cache",
 		LogLevel:               "info",
@@ -210,6 +214,14 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["latency_monitor_interval"]; !ok {
 		raw["latency_monitor_interval"] = "2s"
+		changed = true
+	}
+	if _, ok := raw["recovery_cooldown"]; !ok {
+		raw["recovery_cooldown"] = "5m"
+		changed = true
+	}
+	if _, ok := raw["recovery_successes"]; !ok {
+		raw["recovery_successes"] = 2
 		changed = true
 	}
 	if dns, ok := raw["cloudflare_dns"].(map[string]any); ok {
@@ -501,7 +513,10 @@ func (c *Config) Validate() error {
 	if c.TargetPort < 1 || c.TargetPort > 65535 {
 		return errors.New("target_port 超出范围")
 	}
-	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 || c.ScanInterval.Value() <= 0 || c.HealthInterval.Value() <= 0 || c.LatencyMonitorInterval.Value() <= 0 || c.Update.CheckInterval.Value() <= 0 {
+	if c.RecoverySuccesses < 1 {
+		return errors.New("recovery_successes 必须大于 0")
+	}
+	if c.MaxLatency.Value() <= 0 || c.DialTimeout.Value() <= 0 || c.ScanInterval.Value() <= 0 || c.HealthInterval.Value() <= 0 || c.LatencyMonitorInterval.Value() <= 0 || c.RecoveryCooldown.Value() <= 0 || c.Update.CheckInterval.Value() <= 0 {
 		return errors.New("超时时间必须大于 0")
 	}
 	if strings.TrimSpace(c.Update.Repository) == "" || !regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`).MatchString(c.Update.Repository) {
