@@ -242,7 +242,14 @@ func (a *App) maintain(ctx context.Context) {
 				status.dnsNeedsSync = true
 			}
 			if status.dnsNeedsSync {
-				a.syncDNS(ctx)
+				a.mu.Lock()
+				scanning := a.state.Scan.InProgress
+				a.mu.Unlock()
+				if scanning && !status.dnsImmediate {
+					a.logger.Debug("扫描进行中，非保护性 DNS 同步延后至最终扫描完成")
+				} else {
+					a.syncDNS(ctx)
+				}
 			}
 			if status.healthyCount < a.cfg.MinHealthyCount {
 				if a.scansPaused() {
@@ -591,6 +598,7 @@ func (a *App) incrementDailyScanLocked(now time.Time) {
 type healthStatus struct {
 	allHealthy   bool
 	dnsNeedsSync bool
+	dnsImmediate bool
 	healthyCount int
 	removed      int
 	reordered    bool
@@ -690,6 +698,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	}
 	newDNSIPs := a.desiredDNSIPsLocked()
 	dnsNeedsSync = a.shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, newDNSIPs, removed, time.Now())
+	dnsImmediate := syncedIPRemoved(oldSyncedIPs, removed)
 	pool = append([]scanner.Result(nil), newPool...)
 	healthyCount = len(newPool)
 	a.mu.Unlock()
@@ -704,7 +713,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 		a.logger.Debug("转发池已按最新延迟重新排序", "primary_ip", valueOr(a.primaryIP(pool), "暂无"))
 	}
 	a.saveState()
-	return healthStatus{allHealthy: allHealthy && len(removed) == 0, dnsNeedsSync: dnsNeedsSync, healthyCount: healthyCount, removed: len(removed), reordered: reordered}
+	return healthStatus{allHealthy: allHealthy && len(removed) == 0, dnsNeedsSync: dnsNeedsSync, dnsImmediate: dnsImmediate, healthyCount: healthyCount, removed: len(removed), reordered: reordered}
 }
 
 func mergeTargetStates(results []scanner.Result, existing []TargetState) []TargetState {
@@ -915,6 +924,19 @@ func sameStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func syncedIPRemoved(syncedIPs []string, removed map[netip.Addr]struct{}) bool {
+	for _, ip := range syncedIPs {
+		parsed, err := netip.ParseAddr(ip)
+		if err != nil {
+			return true
+		}
+		if _, ok := removed[parsed]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) primaryIP(pool []scanner.Result) string {

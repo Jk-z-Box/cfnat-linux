@@ -100,6 +100,16 @@ func TestFinalScanSkipsDuplicateDNSSync(t *testing.T) {
 	}
 }
 
+func TestSyncedIPRemovedRequiresImmediateDNSSync(t *testing.T) {
+	removed := map[netip.Addr]struct{}{netip.MustParseAddr("192.0.2.1"): {}}
+	if !syncedIPRemoved([]string{"192.0.2.1"}, removed) {
+		t.Fatal("removed synced IP should require immediate DNS sync")
+	}
+	if syncedIPRemoved([]string{"192.0.2.2"}, removed) {
+		t.Fatal("unrelated removed IP should not require immediate DNS sync")
+	}
+}
+
 func TestSelectPoolAfterHealthScanReplacesWhenScanIsFaster(t *testing.T) {
 	current := []scanner.Result{
 		result("192.0.2.1", 120),
