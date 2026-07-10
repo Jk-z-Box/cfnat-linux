@@ -242,14 +242,7 @@ func (a *App) maintain(ctx context.Context) {
 				status.dnsNeedsSync = true
 			}
 			if status.dnsNeedsSync {
-				a.mu.Lock()
-				scanning := a.state.Scan.InProgress
-				a.mu.Unlock()
-				if scanning {
-					a.logger.Debug("扫描进行中，DNS 同步延后至最终扫描完成")
-				} else {
-					a.syncDNS(ctx)
-				}
+				a.syncDNS(ctx)
 			}
 			if status.healthyCount < a.cfg.MinHealthyCount {
 				if a.scansPaused() {
