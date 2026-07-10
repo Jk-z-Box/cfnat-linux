@@ -7,6 +7,8 @@ INSTALL_BIN="/usr/local/bin/cfnat"
 CONFIG_DIR="/etc/cfnat"
 STATE_DIR="/var/lib/cfnat"
 SERVICE_FILE="/etc/systemd/system/cfnat.service"
+WEB_RESTART_SERVICE_FILE="/etc/systemd/system/cfnat-web-restart.service"
+WEB_RESTART_PATH_FILE="/etc/systemd/system/cfnat-web-restart.path"
 UPDATE_SERVICE_FILE="/etc/systemd/system/cfnat-update.service"
 UPDATE_TIMER_FILE="/etc/systemd/system/cfnat-update.timer"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -352,6 +354,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
+  "ip_blacklist": [],
   "random_ips": true,
   "max_candidates": 2000,
   "valid_ip_count": 20,
@@ -467,6 +470,27 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 WantedBy=multi-user.target
 EOF
 
+cat > "${WEB_RESTART_SERVICE_FILE}" <<'EOF'
+[Unit]
+Description=Restart cfnat requested by Web panel
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'rm -f /var/lib/cfnat/restart-request; /bin/systemctl restart cfnat.service'
+EOF
+
+cat > "${WEB_RESTART_PATH_FILE}" <<'EOF'
+[Unit]
+Description=Watch cfnat Web restart request
+
+[Path]
+PathExists=/var/lib/cfnat/restart-request
+Unit=cfnat-web-restart.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 cat > "${UPDATE_SERVICE_FILE}" <<'EOF'
 [Unit]
 Description=cfnat-linux background updater
@@ -499,6 +523,7 @@ install -m 0755 "${PROJECT_DIR}/scripts/uninstall.sh" /usr/local/lib/cfnat/unins
 "${INSTALL_BIN}" -config "${CONFIG_DIR}/config.json" check-config
 systemctl daemon-reload
 systemctl enable cfnat
+systemctl enable --now cfnat-web-restart.path
 systemctl enable --now cfnat-update.timer
 systemctl restart cfnat
 info "安装完成"

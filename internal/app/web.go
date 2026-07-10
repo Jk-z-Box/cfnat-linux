@@ -177,16 +177,14 @@ func (w *webServer) handleCFNatScanPause(rw http.ResponseWriter, r *http.Request
 }
 
 func (w *webServer) handleCFNatRestartProcess(rw http.ResponseWriter, r *http.Request) {
-	go func() {
-		time.Sleep(250 * time.Millisecond)
-		unit := fmt.Sprintf("cfnat-web-restart-%d", time.Now().UnixNano())
-		cmd := exec.Command("systemd-run", "--unit", unit, "--description", "cfnat web requested restart scan", "--on-active=1s", "/bin/systemctl", "restart", "cfnat")
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			w.app.logger.Error("Web 触发 cfnatctl scan 失败", "error", err, "output", strings.TrimSpace(string(out)))
-		}
-	}()
-	w.redirect(rw, "已触发重启进程任务，服务将重启并重新优选。")
+	requestPath := "/var/lib/cfnat/restart-request"
+	data := []byte(time.Now().UTC().Format(time.RFC3339Nano) + "\n")
+	if err := os.WriteFile(requestPath, data, 0640); err != nil {
+		w.app.logger.Error("Web 触发重启进程失败", "error", err, "request", requestPath)
+		w.render(rw, "触发重启进程失败："+err.Error())
+		return
+	}
+	w.redirect(rw, "已提交重启进程请求，systemd 将重启 cfnat 并重新优选。")
 }
 
 func (w *webServer) handleCFNatToggle(rw http.ResponseWriter, r *http.Request) {
