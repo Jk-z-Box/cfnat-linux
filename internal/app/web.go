@@ -398,7 +398,14 @@ func (w *webServer) handleCFNatConfigFile(rw http.ResponseWriter, r *http.Reques
 		w.render(rw, "配置文件保存失败：JSON 格式错误："+err.Error())
 		return
 	}
-	dir := filepath.Dir(w.app.configPath)
+	dir := filepath.Dir(w.app.cfg.StateFile)
+	if strings.TrimSpace(dir) == "" || dir == "." {
+		dir = "/var/lib/cfnat"
+	}
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		w.render(rw, "配置文件保存失败："+err.Error())
+		return
+	}
 	tmp, err := os.CreateTemp(dir, ".config-web-*.json")
 	if err != nil {
 		w.render(rw, "配置文件保存失败："+err.Error())
@@ -407,6 +414,11 @@ func (w *webServer) handleCFNatConfigFile(rw http.ResponseWriter, r *http.Reques
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(append([]byte(content), '\n')); err != nil {
+		_ = tmp.Close()
+		w.render(rw, "配置文件保存失败："+err.Error())
+		return
+	}
+	if err := tmp.Chmod(0640); err != nil {
 		_ = tmp.Close()
 		w.render(rw, "配置文件保存失败："+err.Error())
 		return

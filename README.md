@@ -25,6 +25,7 @@
 - 管理面板可選啟用管理密碼，支援開關與修改；配置只保存 SHA-256 雜湊，不保存明文。
 - 定時檢查 GitHub Release；有新版本時顯示在狀態面板，並可選擇啟用 systemd timer 背景自動更新。
 - 冷卻恢復池加入恢復冷卻時間與連續成功門檻，避免抖動 IP 被剔除後立刻回池造成反覆刷屏。
+- Web「配置文件修改」使用 `/var/lib/cfnat` 生成臨時校驗文件，避免低權限服務在 `/etc/cfnat` 目錄建立臨時文件時出現 permission denied。
 - Web 管理面板新安裝時預設啟用，並優先於 TCP 轉發與初始掃描啟動；透過瀏覽器查看 cfnat 與 Shodan 統一狀態摘要、保存常用配置、管理 `ip_sources` IP 來源與 IP 黑名單、暫停/恢復 TCP 轉發、暫停/恢復掃描、觸發重掃或透過 /var/lib/cfnat/restart-request 與 cfnat-web-restart.path 重啟進程；狀態透過 Server-Sent Events 實時推送，不依賴定時輪詢。內建掃描互斥保護，避免 startup、retry、scheduled、health 或 Web 手動重掃同時執行造成重複掃描與重複 DNS 同步；自動 retry 會在掃描進行中靜默等待，避免刷屏日誌。
 - Web 面板使用獨立的用戶名與密碼，與 SSH 菜單管理密碼互不干涉；敏感設定預設折疊，避免誤觸。
 - Web 介面預設繁體中文，右上角可切換繁體中文、簡體中文或英文，登出按鈕與語言切換集中放置。
@@ -49,10 +50,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.10.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.10/cfnat-linux-v0.17.10.tar.gz
+curl -fL -o cfnat-linux-v0.17.11.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.11/cfnat-linux-v0.17.11.tar.gz
 
-tar -xzf cfnat-linux-v0.17.10.tar.gz
+tar -xzf cfnat-linux-v0.17.11.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -121,7 +122,7 @@ Web 面板目前可管理：
 - 在「IP 源設定」中以填空方式新增或刪除 `ip_sources` 來源；
 - 在「IP 黑名單」中新增或刪除不允許進入候選池的 IP/CIDR；
 - 在「測速篩選」中修改 TCP 初篩最大值 `max_candidates`；
-- 在「配置文件修改」中直接編輯 `/etc/cfnat/config.json`，保存前會驗證 JSON 並執行 `cfnatctl check`；
+- 在「配置文件修改」中直接編輯 `/etc/cfnat/config.json`，保存前會在 `/var/lib/cfnat` 生成臨時文件驗證 JSON 並執行 `cfnatctl check`；
 - 折疊顯示 Cloudflare Zone ID、DNS 域名、Web 帳密、Shodan API Key 等敏感設定；
 - 啟用/停用 Shodan IP Panel；
 - 管理 Shodan 多配置、API Key、查詢條件、抓取數量；
@@ -290,7 +291,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.10
+make release VERSION=v0.17.11
 ```
 
 ## 命令列
