@@ -29,7 +29,11 @@ type Profile struct {
 	FetchCount         int    `json:"fetch_count"`
 	DownloadEnabled    bool   `json:"download_enabled"`
 	AutoFetchEnabled   bool   `json:"auto_fetch_enabled"`
+	AutoFetchMode      string `json:"auto_fetch_mode"`
 	AutoFetchInterval  string `json:"auto_fetch_interval"`
+	AutoFetchTime      string `json:"auto_fetch_time"`
+	AutoFetchWeekday   int    `json:"auto_fetch_weekday"`
+	AutoFetchMonthDay  int    `json:"auto_fetch_month_day"`
 	LastAutoFetchAt    string `json:"last_auto_fetch_at"`
 	NextAutoFetchAt    string `json:"next_auto_fetch_at"`
 	LastAutoFetchError string `json:"last_auto_fetch_error"`
@@ -306,21 +310,29 @@ func (m *Manager) FetchProfile(ctx context.Context, profileName string) error {
 	return nil
 }
 
-func (m *Manager) UpdateActiveSchedule(enabled bool, interval string) error {
+func (m *Manager) UpdateActiveSchedule(enabled bool, mode, interval, clock string, weekday, monthDay int) error {
 	cfg, err := m.Config()
 	if err != nil {
 		return err
 	}
 	name := cfg.ActiveProfile
 	p := cfg.Profiles[name]
-	parsed, err := parseAutoFetchInterval(interval)
+	mode, interval, clock, weekday, monthDay, err = normalizeAutoFetchSchedule(mode, interval, clock, weekday, monthDay)
 	if err != nil {
 		return err
 	}
 	p.AutoFetchEnabled = enabled
-	p.AutoFetchInterval = parsed.String()
+	p.AutoFetchMode = mode
+	p.AutoFetchInterval = interval
+	p.AutoFetchTime = clock
+	p.AutoFetchWeekday = weekday
+	p.AutoFetchMonthDay = monthDay
 	if enabled {
-		p.NextAutoFetchAt = time.Now().Add(parsed).Format(time.RFC3339)
+		next, err := nextAutoFetchTime(p, time.Now())
+		if err != nil {
+			return err
+		}
+		p.NextAutoFetchAt = next.Format(time.RFC3339)
 	} else {
 		p.NextAutoFetchAt = ""
 	}
@@ -355,7 +367,7 @@ func (m *Manager) RunDueAutoFetch(ctx context.Context) {
 		if !profile.AutoFetchEnabled {
 			continue
 		}
-		interval, err := parseAutoFetchInterval(profile.AutoFetchInterval)
+		nextTime, err := nextAutoFetchTime(profile, nowTime)
 		if err != nil {
 			profile.LastAutoFetchError = err.Error()
 			cfg.Profiles[name] = profile
@@ -371,7 +383,7 @@ func (m *Manager) RunDueAutoFetch(ctx context.Context) {
 		if !due {
 			continue
 		}
-		_ = m.markAutoFetchDue(name, nowTime, interval)
+		_ = m.markAutoFetchDue(name, nowTime, nextTime)
 		if err := m.FetchProfile(ctx, name); err != nil {
 			m.recordAutoFetch(name, err)
 		} else {
@@ -380,14 +392,14 @@ func (m *Manager) RunDueAutoFetch(ctx context.Context) {
 	}
 }
 
-func (m *Manager) markAutoFetchDue(name string, at time.Time, interval time.Duration) error {
+func (m *Manager) markAutoFetchDue(name string, at, next time.Time) error {
 	cfg, err := m.Config()
 	if err != nil {
 		return err
 	}
 	p := cfg.Profiles[name]
 	p.LastAutoFetchAt = at.Format(time.RFC3339)
-	p.NextAutoFetchAt = at.Add(interval).Format(time.RFC3339)
+	p.NextAutoFetchAt = next.Format(time.RFC3339)
 	cfg.Profiles[name] = normalizeProfile(name, p)
 	return m.SaveConfig(cfg)
 }
@@ -398,12 +410,12 @@ func (m *Manager) recordAutoFetch(name string, err error) {
 		return
 	}
 	p := cfg.Profiles[name]
-	interval, intervalErr := parseAutoFetchInterval(p.AutoFetchInterval)
-	if intervalErr != nil {
-		interval = 6 * time.Hour
+	next, nextErr := nextAutoFetchTime(p, time.Now())
+	if nextErr != nil {
+		next = time.Now().Add(6 * time.Hour)
 	}
 	p.LastAutoFetchAt = time.Now().Format(time.RFC3339)
-	p.NextAutoFetchAt = time.Now().Add(interval).Format(time.RFC3339)
+	p.NextAutoFetchAt = next.Format(time.RFC3339)
 	if err != nil {
 		p.LastAutoFetchError = err.Error()
 	} else {
@@ -521,8 +533,20 @@ func normalizeProfile(name string, p Profile) Profile {
 	if p.Name == "" {
 		p.Name = name
 	}
+	if strings.TrimSpace(p.AutoFetchMode) == "" {
+		p.AutoFetchMode = "interval"
+	}
 	if strings.TrimSpace(p.AutoFetchInterval) == "" {
 		p.AutoFetchInterval = "6h"
+	}
+	if strings.TrimSpace(p.AutoFetchTime) == "" {
+		p.AutoFetchTime = "03:00"
+	}
+	if p.AutoFetchWeekday < 1 || p.AutoFetchWeekday > 7 {
+		p.AutoFetchWeekday = 1
+	}
+	if p.AutoFetchMonthDay < 1 || p.AutoFetchMonthDay > 31 {
+		p.AutoFetchMonthDay = 1
 	}
 	if p.FetchCount < 1 {
 		p.FetchCount = 200
@@ -531,6 +555,40 @@ func normalizeProfile(name string, p Profile) Profile {
 		p.FetchCount = 10000
 	}
 	return p
+}
+
+func normalizeAutoFetchSchedule(mode, interval, clock string, weekday, monthDay int) (string, string, string, int, int, error) {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		mode = "interval"
+	}
+	switch mode {
+	case "interval":
+		parsed, err := parseAutoFetchInterval(interval)
+		if err != nil {
+			return "", "", "", 0, 0, err
+		}
+		interval = parsed.String()
+	case "daily", "weekly", "monthly":
+		if _, _, err := parseAutoFetchClock(clock); err != nil {
+			return "", "", "", 0, 0, err
+		}
+	default:
+		return "", "", "", 0, 0, fmt.Errorf("定时获取周期无效")
+	}
+	if strings.TrimSpace(interval) == "" {
+		interval = "6h"
+	}
+	if strings.TrimSpace(clock) == "" {
+		clock = "03:00"
+	}
+	if weekday < 1 || weekday > 7 {
+		return "", "", "", 0, 0, fmt.Errorf("每周获取日期无效，请选择周一到周日")
+	}
+	if monthDay < 1 || monthDay > 31 {
+		return "", "", "", 0, 0, fmt.Errorf("每月获取日期无效，请填写 1 到 31")
+	}
+	return mode, interval, clock, weekday, monthDay, nil
 }
 
 func parseAutoFetchInterval(value string) (time.Duration, error) {
@@ -546,6 +604,85 @@ func parseAutoFetchInterval(value string) (time.Duration, error) {
 		return 0, fmt.Errorf("定时获取间隔不能小于 1m")
 	}
 	return parsed, nil
+}
+
+func parseAutoFetchClock(value string) (hour, minute int, err error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "03:00"
+	}
+	parsed, err := time.Parse("15:04", value)
+	if err != nil {
+		return 0, 0, fmt.Errorf("定时获取时间格式无效，请使用 HH:MM，例如 03:30")
+	}
+	return parsed.Hour(), parsed.Minute(), nil
+}
+
+func nextAutoFetchTime(p Profile, from time.Time) (time.Time, error) {
+	p = normalizeProfile(p.Name, p)
+	switch p.AutoFetchMode {
+	case "interval":
+		interval, err := parseAutoFetchInterval(p.AutoFetchInterval)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return from.Add(interval), nil
+	case "daily":
+		return nextDailyAutoFetchTime(p.AutoFetchTime, from)
+	case "weekly":
+		return nextWeeklyAutoFetchTime(p.AutoFetchTime, p.AutoFetchWeekday, from)
+	case "monthly":
+		return nextMonthlyAutoFetchTime(p.AutoFetchTime, p.AutoFetchMonthDay, from)
+	default:
+		return time.Time{}, fmt.Errorf("定时获取周期无效")
+	}
+}
+
+func nextDailyAutoFetchTime(clock string, from time.Time) (time.Time, error) {
+	hour, minute, err := parseAutoFetchClock(clock)
+	if err != nil {
+		return time.Time{}, err
+	}
+	next := time.Date(from.Year(), from.Month(), from.Day(), hour, minute, 0, 0, from.Location())
+	if !next.After(from) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next, nil
+}
+
+func nextWeeklyAutoFetchTime(clock string, weekday int, from time.Time) (time.Time, error) {
+	hour, minute, err := parseAutoFetchClock(clock)
+	if err != nil {
+		return time.Time{}, err
+	}
+	target := time.Weekday(weekday % 7)
+	days := (int(target) - int(from.Weekday()) + 7) % 7
+	next := time.Date(from.Year(), from.Month(), from.Day(), hour, minute, 0, 0, from.Location()).AddDate(0, 0, days)
+	if !next.After(from) {
+		next = next.AddDate(0, 0, 7)
+	}
+	return next, nil
+}
+
+func nextMonthlyAutoFetchTime(clock string, monthDay int, from time.Time) (time.Time, error) {
+	hour, minute, err := parseAutoFetchClock(clock)
+	if err != nil {
+		return time.Time{}, err
+	}
+	next := monthlyTime(from.Year(), from.Month(), monthDay, hour, minute, from.Location())
+	if !next.After(from) {
+		firstOfNextMonth := time.Date(from.Year(), from.Month()+1, 1, 0, 0, 0, 0, from.Location())
+		next = monthlyTime(firstOfNextMonth.Year(), firstOfNextMonth.Month(), monthDay, hour, minute, from.Location())
+	}
+	return next, nil
+}
+
+func monthlyTime(year int, month time.Month, day, hour, minute int, loc *time.Location) time.Time {
+	lastDay := time.Date(year, month+1, 0, hour, minute, 0, 0, loc).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(year, month, day, hour, minute, 0, 0, loc)
 }
 
 func BuildQuery(p Profile) string {
