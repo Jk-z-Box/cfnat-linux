@@ -82,6 +82,24 @@ func TestDNSLatencySyncPolicy(t *testing.T) {
 	}
 }
 
+func TestFinalScanSkipsDuplicateDNSSync(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.DNS.Enabled = true
+	cfg.DNS.RecordType = "A"
+	cfg.DNS.SyncCount = 1
+	app := New(cfg, nil, nil, "v0.17.5", "")
+	app.pool = []scanner.Result{result("192.0.2.1", 100)}
+	app.state.DNS.Synced = true
+	app.state.DNS.SyncedIPs = []string{"192.0.2.1"}
+	if app.shouldSyncDNSAfterFinalScanLocked() {
+		t.Fatal("final scan should not sync DNS when desired IP is already synced")
+	}
+	app.pool = []scanner.Result{result("192.0.2.2", 90)}
+	if !app.shouldSyncDNSAfterFinalScanLocked() {
+		t.Fatal("final scan should sync DNS when desired IP changed")
+	}
+}
+
 func TestSelectPoolAfterHealthScanReplacesWhenScanIsFaster(t *testing.T) {
 	current := []scanner.Result{
 		result("192.0.2.1", 120),

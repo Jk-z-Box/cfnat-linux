@@ -18,6 +18,7 @@
 - 若已同步到 Cloudflare 的 IP 被判定不健康並剔除，會自動把健康 IP 池重新同步到 DNS。
 - DNS 不會預設跟隨 2 秒延遲排序同步；可選擇開啟「延遲排序冷卻同步」，按自訂冷卻時間低頻更新。
 - DNS 採用「先建立新記錄、再刪除舊記錄」，掃描失敗時絕不清空解析。
+- 分批掃描熱更新後若已同步相同 DNS IP，最終掃描完成時會跳過重複 Cloudflare DNS 同步。
 - systemd 開機啟動、自動重啟、journald 日誌與低權限執行。
 - 首次掃描無結果時保持背景執行並定期重試，不再進入 systemd 重啟循環。
 - 顯示當日掃描/重選觸發次數，方便觀察是否頻繁重掃。
@@ -47,10 +48,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.5.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.5/cfnat-linux-v0.17.5.tar.gz
+curl -fL -o cfnat-linux-v0.17.6.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.6/cfnat-linux-v0.17.6.tar.gz
 
-tar -xzf cfnat-linux-v0.17.5.tar.gz
+tar -xzf cfnat-linux-v0.17.6.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -286,7 +287,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.5
+make release VERSION=v0.17.6
 ```
 
 ## 命令列

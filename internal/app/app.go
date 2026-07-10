@@ -354,7 +354,8 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	a.state.Scan.Completed = true
 	a.state.Scan.CompletedAt = &completed
 	a.state.Scan.LastError = ""
-	if a.cfg.DNS.Enabled {
+	dnsNeedsSync := a.shouldSyncDNSAfterFinalScanLocked()
+	if dnsNeedsSync {
 		a.state.DNS.Synced = false
 		a.state.DNS.LastError = "同步中"
 	}
@@ -367,7 +368,9 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	}
 	a.saveState()
 
-	a.syncDNS(ctx)
+	if dnsNeedsSync {
+		a.syncDNS(ctx)
+	}
 	return nil
 }
 
@@ -855,6 +858,20 @@ func (a *App) desiredDNSIPsLocked() []string {
 		}
 	}
 	return ips
+}
+
+func (a *App) shouldSyncDNSAfterFinalScanLocked() bool {
+	if !a.cfg.DNS.Enabled {
+		return false
+	}
+	desired := a.desiredDNSIPsLocked()
+	if len(desired) == 0 {
+		return false
+	}
+	if !a.state.DNS.Synced || len(a.state.DNS.SyncedIPs) == 0 {
+		return true
+	}
+	return !sameStrings(a.state.DNS.SyncedIPs, desired)
 }
 
 func (a *App) shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, newDesiredIPs []string, removed map[netip.Addr]struct{}, now time.Time) bool {
