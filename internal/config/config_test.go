@@ -328,6 +328,28 @@ func TestBlacklistSpeedTestSetAndValidation(t *testing.T) {
 	}
 }
 
+func TestMigrateBlacklistSpeedIntervalToHours(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Defaults()
+	cfg.ConfigVersion = 17
+	cfg.BlacklistSpeedTest.Interval = Duration(30 * time.Minute)
+	data, _ := json.Marshal(cfg)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := Migrate(path)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConfigVersion != 18 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
+		t.Fatalf("version=%d blacklist interval=%s", got.ConfigVersion, got.BlacklistSpeedTest.Interval.Value())
+	}
+}
+
 func TestRejectInvalidManagementPasswordHash(t *testing.T) {
 	cfg := Defaults()
 	cfg.Management.PasswordEnabled = true

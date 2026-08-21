@@ -145,7 +145,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          17,
+		ConfigVersion:          18,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -350,9 +350,12 @@ func Migrate(path string) (bool, error) {
 		if _, ok := black["interval"]; !ok {
 			black["interval"] = "24h"
 			changed = true
-		} else if interval, ok := black["interval"].(string); ok && interval == "30m" {
-			black["interval"] = "24h"
-			changed = true
+		} else if interval, ok := black["interval"].(string); ok {
+			parsed, err := time.ParseDuration(interval)
+			if err != nil || parsed%time.Hour != 0 {
+				black["interval"] = "24h"
+				changed = true
+			}
 		}
 		if _, ok := black["timeout"]; !ok {
 			black["timeout"] = "5s"
@@ -411,8 +414,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 17 {
-		raw["config_version"] = 17
+	if version, _ := raw["config_version"].(float64); int(version) < 18 {
+		raw["config_version"] = 18
 		changed = true
 	}
 	if !changed {
