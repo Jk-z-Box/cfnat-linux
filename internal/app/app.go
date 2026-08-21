@@ -69,18 +69,34 @@ type DailyScanState struct {
 	Count int    `json:"count"`
 }
 
+type PostPoolSpeedState struct {
+	Enabled    bool       `json:"enabled"`
+	InProgress bool       `json:"in_progress"`
+	Completed  bool       `json:"completed"`
+	CurrentIP  string     `json:"current_ip,omitempty"`
+	Checked    int        `json:"checked"`
+	Total      int        `json:"total"`
+	Removed    int        `json:"removed"`
+	MinMBps    float64    `json:"min_mbps,omitempty"`
+	LastSpeed  float64    `json:"last_speed_mbps,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+	LastError  string     `json:"last_error,omitempty"`
+}
+
 type RuntimeState struct {
-	UpdatedAt  time.Time      `json:"updated_at"`
-	Status     string         `json:"status"`
-	Listen     string         `json:"listen"`
-	MaxLatency string         `json:"max_latency"`
-	PrimaryIP  string         `json:"primary_ip,omitempty"`
-	DailyScan  DailyScanState `json:"daily_scan"`
-	Scan       ScanState      `json:"scan"`
-	Targets    []TargetState  `json:"targets,omitempty"`
-	Recovery   []TargetState  `json:"recovery,omitempty"`
-	DNS        DNSState       `json:"dns"`
-	Update     UpdateState    `json:"update"`
+	UpdatedAt     time.Time          `json:"updated_at"`
+	Status        string             `json:"status"`
+	Listen        string             `json:"listen"`
+	MaxLatency    string             `json:"max_latency"`
+	PrimaryIP     string             `json:"primary_ip,omitempty"`
+	DailyScan     DailyScanState     `json:"daily_scan"`
+	Scan          ScanState          `json:"scan"`
+	PostPoolSpeed PostPoolSpeedState `json:"post_pool_speed"`
+	Targets       []TargetState      `json:"targets,omitempty"`
+	Recovery      []TargetState      `json:"recovery,omitempty"`
+	DNS           DNSState           `json:"dns"`
+	Update        UpdateState        `json:"update"`
 }
 
 type App struct {
@@ -560,99 +576,156 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 	a.mu.Lock()
 	cfg := a.cfg
 	if !cfg.PostPoolSpeedTest.Enabled {
+		a.state.PostPoolSpeed = PostPoolSpeedState{Enabled: false, Completed: true}
 		a.mu.Unlock()
+		a.saveState()
 		return false
 	}
 	pool := append([]scanner.Result(nil), a.pool...)
 	scannerRef := a.scanner
+	started := time.Now().UTC()
+	a.state.PostPoolSpeed = PostPoolSpeedState{Enabled: true, InProgress: true, Total: len(pool), MinMBps: cfg.PostPoolSpeedTest.MinMBps, StartedAt: &started, UpdatedAt: &started}
 	a.mu.Unlock()
+	a.saveState()
 	if len(pool) == 0 {
+		a.mu.Lock()
+		now := time.Now().UTC()
+		a.state.PostPoolSpeed.InProgress = false
+		a.state.PostPoolSpeed.Completed = true
+		a.state.PostPoolSpeed.UpdatedAt = &now
+		a.mu.Unlock()
+		a.saveState()
 		return false
 	}
 	a.logger.Info("开始入池后逐个测速筛选", "targets", len(pool), "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "timeout", cfg.PostPoolSpeedTest.Timeout.Value(), "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
-	kept := make([]scanner.Result, 0, len(pool))
-	removed := make(map[netip.Addr]struct{})
-	blacklistAdditions := []string{}
-	for _, result := range pool {
+	dnsNeedsSync := false
+	for i, result := range pool {
 		if err := ctx.Err(); err != nil {
 			a.logger.Warn("入池后测速筛选被中断", "error", err)
+			a.mu.Lock()
+			now := time.Now().UTC()
+			a.state.PostPoolSpeed.InProgress = false
+			a.state.PostPoolSpeed.Completed = false
+			a.state.PostPoolSpeed.LastError = err.Error()
+			a.state.PostPoolSpeed.UpdatedAt = &now
+			a.mu.Unlock()
+			a.saveState()
 			break
 		}
+		a.mu.Lock()
+		now := time.Now().UTC()
+		a.state.PostPoolSpeed.CurrentIP = result.IP.String()
+		a.state.PostPoolSpeed.Checked = i
+		a.state.PostPoolSpeed.UpdatedAt = &now
+		a.mu.Unlock()
+		a.saveState()
+
 		speed, err := scannerRef.DownloadSpeed(ctx, result.IP, cfg.PostPoolSpeedTest.Timeout.Value())
 		if err != nil || speed <= 0 || speed < cfg.PostPoolSpeedTest.MinMBps {
-			removed[result.IP] = struct{}{}
-			if cfg.PostPoolSpeedTest.AutoBlacklist {
-				blacklistAdditions = append(blacklistAdditions, result.IP.String())
+			removedNow, syncNow := a.removeSlowPostPoolIP(result.IP, cfg.PostPoolSpeedTest.AutoBlacklist)
+			if syncNow {
+				dnsNeedsSync = true
 			}
 			if err != nil {
-				a.logger.Debug("入池后测速失败，已剔除", "ip", result.IP.String(), "error", err)
+				a.logger.Warn("入池后测速失败，已实时剔除", "ip", result.IP.String(), "error", err, "removed", removedNow)
 			} else {
-				a.logger.Debug("入池后测速低于门槛，已剔除", "ip", result.IP.String(), "speed_mbps", speed, "min_mbps", cfg.PostPoolSpeedTest.MinMBps)
+				a.logger.Warn("入池后测速低于门槛，已实时剔除", "ip", result.IP.String(), "speed_mbps", speed, "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "removed", removedNow)
 			}
+			a.mu.Lock()
+			now := time.Now().UTC()
+			a.state.PostPoolSpeed.Checked = i + 1
+			a.state.PostPoolSpeed.LastSpeed = speed
+			a.state.PostPoolSpeed.Removed += removedNow
+			a.state.PostPoolSpeed.UpdatedAt = &now
+			a.mu.Unlock()
+			a.saveState()
 			continue
 		}
-		result.SpeedMBps = speed
-		result.CheckedAt = time.Now().UTC()
-		kept = append(kept, result)
+		a.mu.Lock()
+		for j, current := range a.pool {
+			if current.IP == result.IP {
+				a.pool[j].SpeedMBps = speed
+				a.pool[j].CheckedAt = time.Now().UTC()
+				break
+			}
+		}
+		for j := range a.state.Targets {
+			if a.state.Targets[j].IP == result.IP {
+				a.state.Targets[j].SpeedMBps = speed
+				a.state.Targets[j].CheckedAt = time.Now().UTC()
+				break
+			}
+		}
+		now = time.Now().UTC()
+		a.state.PostPoolSpeed.Checked = i + 1
+		a.state.PostPoolSpeed.LastSpeed = speed
+		a.state.PostPoolSpeed.UpdatedAt = &now
+		a.mu.Unlock()
+		a.saveState()
 	}
-	if len(removed) == 0 {
-		a.logger.Info("入池后逐个测速筛选完成，无需剔除", "checked", len(pool), "min_mbps", cfg.PostPoolSpeedTest.MinMBps)
-		return false
-	}
-	sortResults(kept)
+	a.mu.Lock()
+	now := time.Now().UTC()
+	removed := a.state.PostPoolSpeed.Removed
+	remaining := len(a.pool)
+	a.state.PostPoolSpeed.InProgress = false
+	a.state.PostPoolSpeed.Completed = true
+	a.state.PostPoolSpeed.CurrentIP = ""
+	a.state.PostPoolSpeed.Checked = len(pool)
+	a.state.PostPoolSpeed.UpdatedAt = &now
+	a.mu.Unlock()
+	a.saveState()
+	a.logger.Info("入池后逐个测速筛选完成", "checked", len(pool), "removed", removed, "remaining", remaining, "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
+	return dnsNeedsSync
+}
+
+func (a *App) removeSlowPostPoolIP(ip netip.Addr, autoBlacklist bool) (int, bool) {
 	a.mu.Lock()
 	oldSyncedIPs := append([]string(nil), a.state.DNS.SyncedIPs...)
-	filtered := make([]scanner.Result, 0, len(a.pool))
-	keptByIP := make(map[netip.Addr]scanner.Result, len(kept))
-	for _, result := range kept {
-		keptByIP[result.IP] = result
-	}
+	removed := map[netip.Addr]struct{}{}
+	newPool := make([]scanner.Result, 0, len(a.pool))
 	for _, current := range a.pool {
-		if _, drop := removed[current.IP]; drop {
-			delete(a.failures, current.IP)
+		if current.IP == ip {
+			removed[ip] = struct{}{}
+			delete(a.failures, ip)
 			continue
 		}
-		if updated, ok := keptByIP[current.IP]; ok {
-			current.SpeedMBps = updated.SpeedMBps
-			current.CheckedAt = updated.CheckedAt
-		}
-		filtered = append(filtered, current)
+		newPool = append(newPool, current)
 	}
-	sortResults(filtered)
-	a.pool = filtered
-	a.state.Targets = targetStatesFromResults(filtered, "healthy")
-	a.state.PrimaryIP = valueOr(a.primaryIP(filtered), "")
-	if len(filtered) == 0 {
+	if len(removed) == 0 {
+		a.mu.Unlock()
+		return 0, false
+	}
+	sortResults(newPool)
+	a.pool = newPool
+	a.state.Targets = targetStatesFromResults(newPool, "healthy")
+	a.state.PrimaryIP = valueOr(a.primaryIP(newPool), "")
+	if len(newPool) == 0 {
 		a.state.Status = "degraded"
 	} else {
 		a.state.Status = "running"
 	}
 	blacklistChanged := false
-	if cfg.PostPoolSpeedTest.AutoBlacklist {
-		for _, ip := range blacklistAdditions {
-			if !containsString(a.cfg.IPBlacklist, ip) {
-				a.cfg.IPBlacklist = append(a.cfg.IPBlacklist, ip)
-				blacklistChanged = true
-			}
-		}
+	if autoBlacklist && !containsString(a.cfg.IPBlacklist, ip.String()) {
+		a.cfg.IPBlacklist = append(a.cfg.IPBlacklist, ip.String())
+		blacklistChanged = true
 	}
 	blacklist := append([]string(nil), a.cfg.IPBlacklist...)
 	dnsNeedsSync := a.shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, a.desiredDNSIPsLocked(), removed, time.Now())
 	a.mu.Unlock()
-	a.proxy.Update(filtered)
-	a.saveState()
+
+	a.proxy.Update(newPool)
 	if blacklistChanged {
 		if err := config.Set(a.configPath, "ip_blacklist", strings.Join(blacklist, "\n")); err != nil {
-			a.logger.Error("入池后测速自动写入黑名单失败", "error", err)
+			a.logger.Error("入池后测速自动写入黑名单失败", "ip", ip.String(), "error", err)
 		} else if cfg, err := config.Load(a.configPath); err == nil {
 			a.mu.Lock()
 			a.cfg = cfg
 			a.scanner = scanner.New(cfg, a.logger)
 			a.mu.Unlock()
+			a.logger.Warn("入池后测速低速 IP 已实时加入黑名单", "ip", ip.String())
 		}
 	}
-	a.logger.Warn("入池后逐个测速筛选完成，低速 IP 已剔除", "checked", len(pool), "removed", len(removed), "remaining", len(filtered), "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
-	return dnsNeedsSync
+	return 1, dnsNeedsSync
 }
 
 func containsString(items []string, value string) bool {
@@ -1418,6 +1491,9 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 	if state.Scan.LastError != "" {
 		fmt.Fprintf(w, "扫描错误        : %s\n", state.Scan.LastError)
 	}
+	if cfg.PostPoolSpeedTest.Enabled {
+		fmt.Fprintf(w, "测速状态        : %s\n", postPoolSpeedStatusText(state.PostPoolSpeed))
+	}
 	fmt.Fprintf(w, "当前最优 IP     : %s\n", valueOr(state.PrimaryIP, "暂无"))
 	if len(state.Targets) == 0 {
 		fmt.Fprintln(w, "优选 IP 状态    : 暂无")
@@ -1447,6 +1523,25 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 			fmt.Fprintf(w, "DNS 错误        : %s\n", state.DNS.LastError)
 		}
 	}
+}
+
+func postPoolSpeedStatusText(speed PostPoolSpeedState) string {
+	if speed.InProgress {
+		if speed.Total > 0 {
+			if speed.CurrentIP != "" {
+				return fmt.Sprintf("测速中 %d/%d，当前 %s，已剔除 %d", speed.Checked, speed.Total, speed.CurrentIP, speed.Removed)
+			}
+			return fmt.Sprintf("测速中 %d/%d，已剔除 %d", speed.Checked, speed.Total, speed.Removed)
+		}
+		return "测速中"
+	}
+	if speed.LastError != "" && !speed.Completed {
+		return "已中断：" + speed.LastError
+	}
+	if speed.Completed {
+		return fmt.Sprintf("已完成，检测 %d 个，剔除 %d 个", speed.Checked, speed.Removed)
+	}
+	return "等待"
 }
 
 func statusText(value string) string {
