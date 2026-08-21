@@ -350,7 +350,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 15,
+  "config_version": 16,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -396,7 +396,14 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "enabled": false,
     "min_mbps": 1,
     "timeout": "5s",
-    "auto_blacklist": false
+    "auto_blacklist": false,
+    "exempt_list": []
+  },
+  "blacklist_speed_test": {
+    "enabled": false,
+    "interval": "30m",
+    "timeout": "5s",
+    "concurrency": 3
   },
   "management": {
     "password_enabled": false,

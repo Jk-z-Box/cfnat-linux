@@ -1,5 +1,5 @@
 {
-  "config_version": 15,
+  "config_version": 16,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -45,7 +45,14 @@
     "enabled": false,
     "min_mbps": 1,
     "timeout": "5s",
-    "auto_blacklist": false
+    "auto_blacklist": false,
+    "exempt_list": []
+  },
+  "blacklist_speed_test": {
+    "enabled": false,
+    "interval": "30m",
+    "timeout": "5s",
+    "concurrency": 3
   },
   "management": {
     "password_enabled": false,

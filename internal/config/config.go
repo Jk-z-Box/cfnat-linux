@@ -63,6 +63,14 @@ type PostPoolSpeedTestConfig struct {
 	MinMBps       float64  `json:"min_mbps"`
 	Timeout       Duration `json:"timeout"`
 	AutoBlacklist bool     `json:"auto_blacklist"`
+	ExemptList    []string `json:"exempt_list"`
+}
+
+type BlacklistSpeedTestConfig struct {
+	Enabled     bool     `json:"enabled"`
+	Interval    Duration `json:"interval"`
+	Timeout     Duration `json:"timeout"`
+	Concurrency int      `json:"concurrency"`
 }
 
 type ManagementConfig struct {
@@ -90,52 +98,53 @@ type ShodanConfig struct {
 }
 
 type Config struct {
-	ConfigVersion          int                     `json:"config_version"`
-	Listen                 string                  `json:"listen"`
-	IPVersion              int                     `json:"ip_version"`
-	IPSources              []string                `json:"ip_sources"`
-	IPBlacklist            []string                `json:"ip_blacklist"`
-	RandomIPs              bool                    `json:"random_ips"`
-	MaxCandidates          int                     `json:"max_candidates"`
-	ValidIPCount           int                     `json:"valid_ip_count"`
-	PoolSize               int                     `json:"pool_size"`
-	MinHealthyCount        int                     `json:"min_healthy_count"`
-	Concurrency            int                     `json:"concurrency"`
-	TargetPort             int                     `json:"target_port"`
-	TLS                    bool                    `json:"tls"`
-	TLSServerName          string                  `json:"tls_server_name"`
-	InsecureSkipVerify     bool                    `json:"insecure_skip_verify"`
-	CheckURL               string                  `json:"check_url"`
-	ExpectedStatus         int                     `json:"expected_status"`
-	ProbeMode              string                  `json:"probe_mode"`
-	ScanProbeMode          string                  `json:"scan_probe_mode"`
-	HealthProbeMode        string                  `json:"health_probe_mode"`
-	RecoveryProbeMode      string                  `json:"recovery_probe_mode"`
-	MaxLatency             Duration                `json:"max_latency"`
-	DialTimeout            Duration                `json:"dial_timeout"`
-	Colos                  []string                `json:"colos"`
-	ScanIntervalEnabled    bool                    `json:"scan_interval_enabled"`
-	ScanInterval           Duration                `json:"scan_interval"`
-	LatencyMonitorInterval Duration                `json:"latency_monitor_interval"`
-	HealthInterval         Duration                `json:"health_interval"`
-	HealthFailures         int                     `json:"health_failures"`
-	RecoveryCooldown       Duration                `json:"recovery_cooldown"`
-	RecoverySuccesses      int                     `json:"recovery_successes"`
-	StateFile              string                  `json:"state_file"`
-	SourceCacheDir         string                  `json:"source_cache_dir"`
-	LogLevel               string                  `json:"log_level"`
-	DNS                    DNSConfig               `json:"cloudflare_dns"`
-	SpeedTest              SpeedTestConfig         `json:"speed_test"`
-	PostPoolSpeedTest      PostPoolSpeedTestConfig `json:"post_pool_speed_test"`
-	Management             ManagementConfig        `json:"management"`
-	Update                 UpdateConfig            `json:"update"`
-	Web                    WebConfig               `json:"web"`
-	Shodan                 ShodanConfig            `json:"shodan"`
+	ConfigVersion          int                      `json:"config_version"`
+	Listen                 string                   `json:"listen"`
+	IPVersion              int                      `json:"ip_version"`
+	IPSources              []string                 `json:"ip_sources"`
+	IPBlacklist            []string                 `json:"ip_blacklist"`
+	RandomIPs              bool                     `json:"random_ips"`
+	MaxCandidates          int                      `json:"max_candidates"`
+	ValidIPCount           int                      `json:"valid_ip_count"`
+	PoolSize               int                      `json:"pool_size"`
+	MinHealthyCount        int                      `json:"min_healthy_count"`
+	Concurrency            int                      `json:"concurrency"`
+	TargetPort             int                      `json:"target_port"`
+	TLS                    bool                     `json:"tls"`
+	TLSServerName          string                   `json:"tls_server_name"`
+	InsecureSkipVerify     bool                     `json:"insecure_skip_verify"`
+	CheckURL               string                   `json:"check_url"`
+	ExpectedStatus         int                      `json:"expected_status"`
+	ProbeMode              string                   `json:"probe_mode"`
+	ScanProbeMode          string                   `json:"scan_probe_mode"`
+	HealthProbeMode        string                   `json:"health_probe_mode"`
+	RecoveryProbeMode      string                   `json:"recovery_probe_mode"`
+	MaxLatency             Duration                 `json:"max_latency"`
+	DialTimeout            Duration                 `json:"dial_timeout"`
+	Colos                  []string                 `json:"colos"`
+	ScanIntervalEnabled    bool                     `json:"scan_interval_enabled"`
+	ScanInterval           Duration                 `json:"scan_interval"`
+	LatencyMonitorInterval Duration                 `json:"latency_monitor_interval"`
+	HealthInterval         Duration                 `json:"health_interval"`
+	HealthFailures         int                      `json:"health_failures"`
+	RecoveryCooldown       Duration                 `json:"recovery_cooldown"`
+	RecoverySuccesses      int                      `json:"recovery_successes"`
+	StateFile              string                   `json:"state_file"`
+	SourceCacheDir         string                   `json:"source_cache_dir"`
+	LogLevel               string                   `json:"log_level"`
+	DNS                    DNSConfig                `json:"cloudflare_dns"`
+	SpeedTest              SpeedTestConfig          `json:"speed_test"`
+	PostPoolSpeedTest      PostPoolSpeedTestConfig  `json:"post_pool_speed_test"`
+	BlacklistSpeedTest     BlacklistSpeedTestConfig `json:"blacklist_speed_test"`
+	Management             ManagementConfig         `json:"management"`
+	Update                 UpdateConfig             `json:"update"`
+	Web                    WebConfig                `json:"web"`
+	Shodan                 ShodanConfig             `json:"shodan"`
 }
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          15,
+		ConfigVersion:          16,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -175,7 +184,10 @@ func Defaults() Config {
 			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50, Concurrency: 3,
 		},
 		PostPoolSpeedTest: PostPoolSpeedTestConfig{
-			Enabled: false, MinMBps: 1, Timeout: Duration(5 * time.Second), AutoBlacklist: false,
+			Enabled: false, MinMBps: 1, Timeout: Duration(5 * time.Second), AutoBlacklist: false, ExemptList: []string{},
+		},
+		BlacklistSpeedTest: BlacklistSpeedTestConfig{
+			Enabled: false, Interval: Duration(30 * time.Minute), Timeout: Duration(5 * time.Second), Concurrency: 3,
 		},
 		Management: ManagementConfig{PasswordEnabled: false},
 		Update: UpdateConfig{
@@ -295,7 +307,7 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["post_pool_speed_test"]; !ok {
 		raw["post_pool_speed_test"] = map[string]any{
-			"enabled": false, "min_mbps": 1, "timeout": "5s", "auto_blacklist": false,
+			"enabled": false, "min_mbps": 1, "timeout": "5s", "auto_blacklist": false, "exempt_list": []any{},
 		}
 		changed = true
 	} else if post, ok := raw["post_pool_speed_test"].(map[string]any); ok {
@@ -313,6 +325,33 @@ func Migrate(path string) (bool, error) {
 		}
 		if _, ok := post["auto_blacklist"]; !ok {
 			post["auto_blacklist"] = false
+			changed = true
+		}
+		if _, ok := post["exempt_list"]; !ok {
+			post["exempt_list"] = []any{}
+			changed = true
+		}
+	}
+	if _, ok := raw["blacklist_speed_test"]; !ok {
+		raw["blacklist_speed_test"] = map[string]any{
+			"enabled": false, "interval": "30m", "timeout": "5s", "concurrency": 3,
+		}
+		changed = true
+	} else if black, ok := raw["blacklist_speed_test"].(map[string]any); ok {
+		if _, ok := black["enabled"]; !ok {
+			black["enabled"] = false
+			changed = true
+		}
+		if _, ok := black["interval"]; !ok {
+			black["interval"] = "30m"
+			changed = true
+		}
+		if _, ok := black["timeout"]; !ok {
+			black["timeout"] = "5s"
+			changed = true
+		}
+		if _, ok := black["concurrency"]; !ok {
+			black["concurrency"] = 3
 			changed = true
 		}
 	}
@@ -364,8 +403,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 15 {
-		raw["config_version"] = 15
+	if version, _ := raw["config_version"].(float64); int(version) < 16 {
+		raw["config_version"] = 16
 		changed = true
 	}
 	if !changed {
@@ -550,6 +589,32 @@ func Set(path, key, value string) error {
 			return errors.New("post_pool_speed_test_auto_blacklist 只能是 true 或 false")
 		}
 		cfg.PostPoolSpeedTest.AutoBlacklist = parsed
+	case "post_pool_speed_test_exempt_list":
+		cfg.PostPoolSpeedTest.ExemptList = splitNonEmptyLines(value)
+	case "blacklist_speed_test_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("blacklist_speed_test_enabled 只能是 true 或 false")
+		}
+		cfg.BlacklistSpeedTest.Enabled = parsed
+	case "blacklist_speed_test_interval":
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.New("blacklist_speed_test.interval 格式无效，请使用 30m、1h 等格式")
+		}
+		cfg.BlacklistSpeedTest.Interval = Duration(parsed)
+	case "blacklist_speed_test_timeout":
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.New("blacklist_speed_test.timeout 格式无效，请使用 5s、10s 等格式")
+		}
+		cfg.BlacklistSpeedTest.Timeout = Duration(parsed)
+	case "blacklist_speed_test_concurrency":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("blacklist_speed_test.concurrency 必须是整数")
+		}
+		cfg.BlacklistSpeedTest.Concurrency = parsed
 	default:
 		return fmt.Errorf("不允许修改的配置项: %s", key)
 	}
@@ -641,6 +706,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("ip_blacklist 包含无效 IP 或 CIDR: %q", item)
 		}
 	}
+	for _, item := range c.PostPoolSpeedTest.ExemptList {
+		if _, err := netipOrPrefix(item); err != nil {
+			return fmt.Errorf("post_pool_speed_test.exempt_list 包含无效 IP 或 CIDR: %q", item)
+		}
+	}
 	if c.MaxCandidates < 1 || c.Concurrency < 1 || c.ValidIPCount < 1 || c.PoolSize < 1 || c.MinHealthyCount < 1 {
 		return errors.New("候选数、并发数、有效 IP 数、池大小和最小健康 IP 数必须大于 0")
 	}
@@ -716,7 +786,21 @@ func (c *Config) Validate() error {
 			return errors.New("post_pool_speed_test.timeout 必须大于 0")
 		}
 	}
-	if c.SpeedTest.Enabled || c.PostPoolSpeedTest.Enabled {
+	if c.BlacklistSpeedTest.Enabled {
+		if c.BlacklistSpeedTest.Interval.Value() <= 0 {
+			return errors.New("blacklist_speed_test.interval 必须大于 0")
+		}
+		if c.BlacklistSpeedTest.Timeout.Value() <= 0 {
+			return errors.New("blacklist_speed_test.timeout 必须大于 0")
+		}
+		if c.BlacklistSpeedTest.Concurrency < 1 {
+			return errors.New("blacklist_speed_test.concurrency 必须大于 0")
+		}
+		if c.PostPoolSpeedTest.MinMBps <= 0 {
+			return errors.New("启用黑名单 IP 定时测速时 post_pool_speed_test.min_mbps 必须大于 0")
+		}
+	}
+	if c.SpeedTest.Enabled || c.PostPoolSpeedTest.Enabled || c.BlacklistSpeedTest.Enabled {
 		u, err := url.Parse(c.SpeedTest.URL)
 		if err != nil || u.Hostname() == "" || (u.Scheme != "https" && u.Scheme != "http") {
 			return fmt.Errorf("speed_test.url 无效: %q", c.SpeedTest.URL)

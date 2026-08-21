@@ -76,6 +76,7 @@ type PostPoolSpeedState struct {
 	CurrentIP  string     `json:"current_ip,omitempty"`
 	Checked    int        `json:"checked"`
 	Total      int        `json:"total"`
+	Skipped    int        `json:"skipped"`
 	Removed    int        `json:"removed"`
 	MinMBps    float64    `json:"min_mbps,omitempty"`
 	LastSpeed  float64    `json:"last_speed_mbps,omitempty"`
@@ -100,25 +101,26 @@ type RuntimeState struct {
 }
 
 type App struct {
-	cfg        config.Config
-	logger     *slog.Logger
-	scanner    *scanner.Scanner
-	proxy      *proxy.Server
-	dns        *cloudflare.Client
-	version    string
-	configPath string
-	mu         sync.Mutex
-	scanMu     sync.Mutex
-	eventMu    sync.Mutex
-	eventCond  *sync.Cond
-	eventSeq   uint64
-	pool       []scanner.Result
-	recovery   []scanner.Result
-	recoveryAt map[netip.Addr]time.Time
-	recoveryOK map[netip.Addr]int
-	failures   map[netip.Addr]int
-	scanPaused bool
-	state      RuntimeState
+	cfg                    config.Config
+	logger                 *slog.Logger
+	scanner                *scanner.Scanner
+	proxy                  *proxy.Server
+	dns                    *cloudflare.Client
+	version                string
+	configPath             string
+	mu                     sync.Mutex
+	scanMu                 sync.Mutex
+	eventMu                sync.Mutex
+	eventCond              *sync.Cond
+	eventSeq               uint64
+	pool                   []scanner.Result
+	recovery               []scanner.Result
+	recoveryAt             map[netip.Addr]time.Time
+	recoveryOK             map[netip.Addr]int
+	failures               map[netip.Addr]int
+	scanPaused             bool
+	nextBlacklistSpeedTest time.Time
+	state                  RuntimeState
 }
 
 var errScanPaused = errors.New("scan paused")
@@ -204,6 +206,7 @@ func (a *App) maintain(ctx context.Context) {
 	}
 	monitorTicker := time.NewTicker(a.cfg.LatencyMonitorInterval.Value())
 	retryTicker := time.NewTicker(a.cfg.HealthInterval.Value())
+	blacklistSpeedTicker := time.NewTicker(time.Minute)
 	var updateC <-chan time.Time
 	var updateTicker *time.Ticker
 	if a.cfg.Update.CheckEnabled {
@@ -213,6 +216,7 @@ func (a *App) maintain(ctx context.Context) {
 	}
 	defer monitorTicker.Stop()
 	defer retryTicker.Stop()
+	defer blacklistSpeedTicker.Stop()
 	if updateTicker != nil {
 		defer updateTicker.Stop()
 	}
@@ -231,6 +235,8 @@ func (a *App) maintain(ctx context.Context) {
 			}
 		case <-updateC:
 			a.checkUpdate(ctx)
+		case <-blacklistSpeedTicker.C:
+			a.maybeRunBlacklistSpeedTest(ctx)
 		case <-retryTicker.C:
 			a.mu.Lock()
 			empty := len(a.pool) == 0
@@ -582,24 +588,34 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 		return false
 	}
 	pool := append([]scanner.Result(nil), a.pool...)
+	testPool := make([]scanner.Result, 0, len(pool))
+	skipped := 0
+	for _, result := range pool {
+		if blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ExemptList) {
+			skipped++
+			continue
+		}
+		testPool = append(testPool, result)
+	}
 	scannerRef := a.scanner
 	started := time.Now().UTC()
-	a.state.PostPoolSpeed = PostPoolSpeedState{Enabled: true, InProgress: true, Total: len(pool), MinMBps: cfg.PostPoolSpeedTest.MinMBps, StartedAt: &started, UpdatedAt: &started}
+	a.state.PostPoolSpeed = PostPoolSpeedState{Enabled: true, InProgress: true, Total: len(testPool), Skipped: skipped, MinMBps: cfg.PostPoolSpeedTest.MinMBps, StartedAt: &started, UpdatedAt: &started}
 	a.mu.Unlock()
 	a.saveState()
-	if len(pool) == 0 {
+	if len(testPool) == 0 {
 		a.mu.Lock()
 		now := time.Now().UTC()
 		a.state.PostPoolSpeed.InProgress = false
 		a.state.PostPoolSpeed.Completed = true
+		a.state.PostPoolSpeed.Checked = 0
 		a.state.PostPoolSpeed.UpdatedAt = &now
 		a.mu.Unlock()
 		a.saveState()
 		return false
 	}
-	a.logger.Info("开始入池后逐个测速筛选", "targets", len(pool), "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "timeout", cfg.PostPoolSpeedTest.Timeout.Value(), "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
+	a.logger.Info("开始入池后逐个测速筛选", "targets", len(testPool), "skipped_exempt", skipped, "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "timeout", cfg.PostPoolSpeedTest.Timeout.Value(), "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
 	dnsNeedsSync := false
-	for i, result := range pool {
+	for i, result := range testPool {
 		if err := ctx.Err(); err != nil {
 			a.logger.Warn("入池后测速筛选被中断", "error", err)
 			a.mu.Lock()
@@ -641,6 +657,7 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 			a.saveState()
 			continue
 		}
+		a.addPostPoolSpeedExemptIP(result.IP)
 		a.mu.Lock()
 		for j, current := range a.pool {
 			if current.IP == result.IP {
@@ -670,12 +687,182 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 	a.state.PostPoolSpeed.InProgress = false
 	a.state.PostPoolSpeed.Completed = true
 	a.state.PostPoolSpeed.CurrentIP = ""
-	a.state.PostPoolSpeed.Checked = len(pool)
+	a.state.PostPoolSpeed.Checked = len(testPool)
 	a.state.PostPoolSpeed.UpdatedAt = &now
 	a.mu.Unlock()
 	a.saveState()
-	a.logger.Info("入池后逐个测速筛选完成", "checked", len(pool), "removed", removed, "remaining", remaining, "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
+	a.logger.Info("入池后逐个测速筛选完成", "checked", len(testPool), "skipped_exempt", skipped, "removed", removed, "remaining", remaining, "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
 	return dnsNeedsSync
+}
+
+func (a *App) addPostPoolSpeedExemptIP(ip netip.Addr) {
+	a.mu.Lock()
+	if blacklistedAddr(ip, a.cfg.PostPoolSpeedTest.ExemptList) {
+		a.mu.Unlock()
+		return
+	}
+	a.cfg.PostPoolSpeedTest.ExemptList = append(a.cfg.PostPoolSpeedTest.ExemptList, ip.String())
+	exempt := append([]string(nil), a.cfg.PostPoolSpeedTest.ExemptList...)
+	a.mu.Unlock()
+	if err := config.Set(a.configPath, "post_pool_speed_test_exempt_list", strings.Join(exempt, "\n")); err != nil {
+		a.logger.Error("入池后测速免测名单写入失败", "ip", ip.String(), "error", err)
+		return
+	}
+	if cfg, err := config.Load(a.configPath); err == nil {
+		a.mu.Lock()
+		a.cfg = cfg
+		a.scanner = scanner.New(cfg, a.logger)
+		a.mu.Unlock()
+		a.logger.Info("入池后测速达标 IP 已加入免测速名单", "ip", ip.String())
+	}
+}
+
+func (a *App) maybeRunBlacklistSpeedTest(ctx context.Context) {
+	a.mu.Lock()
+	cfg := a.cfg
+	if !cfg.BlacklistSpeedTest.Enabled {
+		a.nextBlacklistSpeedTest = time.Time{}
+		a.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	if a.nextBlacklistSpeedTest.IsZero() {
+		a.nextBlacklistSpeedTest = now.Add(cfg.BlacklistSpeedTest.Interval.Value())
+		a.mu.Unlock()
+		return
+	}
+	if now.Before(a.nextBlacklistSpeedTest) {
+		a.mu.Unlock()
+		return
+	}
+	a.nextBlacklistSpeedTest = now.Add(cfg.BlacklistSpeedTest.Interval.Value())
+	a.mu.Unlock()
+	a.runBlacklistSpeedTest(ctx, cfg)
+}
+
+func (a *App) runBlacklistSpeedTest(ctx context.Context, cfg config.Config) {
+	ips := blacklistExactIPs(cfg.IPBlacklist)
+	if len(ips) == 0 {
+		return
+	}
+	concurrency := cfg.BlacklistSpeedTest.Concurrency
+	if concurrency > len(ips) {
+		concurrency = len(ips)
+	}
+	a.logger.Info("开始黑名单 IP 定时测速", "candidates", len(ips), "concurrency", concurrency, "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "timeout", cfg.BlacklistSpeedTest.Timeout.Value())
+	a.mu.Lock()
+	scannerRef := a.scanner
+	a.mu.Unlock()
+	jobs := make(chan netip.Addr)
+	type result struct {
+		ip    netip.Addr
+		speed float64
+		err   error
+	}
+	results := make(chan result, len(ips))
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ip := range jobs {
+				if ctx.Err() != nil {
+					results <- result{ip: ip, err: ctx.Err()}
+					continue
+				}
+				speed, err := scannerRef.DownloadSpeed(ctx, ip, cfg.BlacklistSpeedTest.Timeout.Value())
+				results <- result{ip: ip, speed: speed, err: err}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, ip := range ips {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- ip:
+			}
+		}
+	}()
+	wg.Wait()
+	close(results)
+
+	restored := make([]netip.Addr, 0)
+	failed := 0
+	for item := range results {
+		if item.err != nil || item.speed <= 0 || item.speed < cfg.PostPoolSpeedTest.MinMBps {
+			failed++
+			continue
+		}
+		restored = append(restored, item.ip)
+	}
+	if len(restored) == 0 {
+		a.logger.Info("黑名单 IP 定时测速完成，无达标 IP", "tested", len(ips), "failed", failed)
+		return
+	}
+	a.unblacklistRestoredIPs(restored)
+}
+
+func (a *App) unblacklistRestoredIPs(restored []netip.Addr) {
+	restoredSet := make(map[string]struct{}, len(restored))
+	for _, ip := range restored {
+		restoredSet[ip.String()] = struct{}{}
+	}
+	a.mu.Lock()
+	newBlacklist := make([]string, 0, len(a.cfg.IPBlacklist))
+	removed := 0
+	for _, item := range a.cfg.IPBlacklist {
+		key := strings.TrimSpace(item)
+		if _, ok := restoredSet[key]; ok {
+			removed++
+			continue
+		}
+		newBlacklist = append(newBlacklist, item)
+	}
+	for _, ip := range restored {
+		if !blacklistedAddr(ip, a.cfg.PostPoolSpeedTest.ExemptList) {
+			a.cfg.PostPoolSpeedTest.ExemptList = append(a.cfg.PostPoolSpeedTest.ExemptList, ip.String())
+		}
+	}
+	exempt := append([]string(nil), a.cfg.PostPoolSpeedTest.ExemptList...)
+	a.cfg.IPBlacklist = newBlacklist
+	a.mu.Unlock()
+	if err := config.Set(a.configPath, "ip_blacklist", strings.Join(newBlacklist, "\n")); err != nil {
+		a.logger.Error("黑名单 IP 达标解除失败", "restored", len(restored), "error", err)
+		return
+	}
+	if err := config.Set(a.configPath, "post_pool_speed_test_exempt_list", strings.Join(exempt, "\n")); err != nil {
+		a.logger.Error("黑名单恢复 IP 写入免测速名单失败", "restored", len(restored), "error", err)
+	}
+	if cfg, err := config.Load(a.configPath); err == nil {
+		a.mu.Lock()
+		a.cfg = cfg
+		a.scanner = scanner.New(cfg, a.logger)
+		a.mu.Unlock()
+	}
+	a.logger.Info("黑名单 IP 测速达标，已解除黑名单并加入免测速名单", "restored", removed)
+}
+
+func blacklistExactIPs(items []string) []netip.Addr {
+	seen := map[netip.Addr]struct{}{}
+	ips := []netip.Addr{}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" || strings.Contains(item, "/") {
+			continue
+		}
+		ip, err := netip.ParseAddr(item)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		ips = append(ips, ip)
+	}
+	return ips
 }
 
 func (a *App) removeSlowPostPoolIP(ip netip.Addr, autoBlacklist bool) (int, bool) {
@@ -1429,9 +1616,14 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 		fmt.Fprintln(w, "测速筛选        : 未启用")
 	}
 	if cfg.PostPoolSpeedTest.Enabled {
-		fmt.Fprintf(w, "入池后测速      : ≥ %.2f MB/s，单 IP %s，自动黑名单 %s\n", cfg.PostPoolSpeedTest.MinMBps, cfg.PostPoolSpeedTest.Timeout.Value(), boolLabel(cfg.PostPoolSpeedTest.AutoBlacklist))
+		fmt.Fprintf(w, "入池后测速      : ≥ %.2f MB/s，单 IP %s，自动黑名单 %s，免测 %d 个\n", cfg.PostPoolSpeedTest.MinMBps, cfg.PostPoolSpeedTest.Timeout.Value(), boolLabel(cfg.PostPoolSpeedTest.AutoBlacklist), len(cfg.PostPoolSpeedTest.ExemptList))
 	} else {
 		fmt.Fprintln(w, "入池后测速      : 未启用")
+	}
+	if cfg.BlacklistSpeedTest.Enabled {
+		fmt.Fprintf(w, "黑名单测速      : 已启用，每 %s，并发 %d，单 IP %s\n", cfg.BlacklistSpeedTest.Interval.Value(), cfg.BlacklistSpeedTest.Concurrency, cfg.BlacklistSpeedTest.Timeout.Value())
+	} else {
+		fmt.Fprintln(w, "黑名单测速      : 未启用")
 	}
 	fmt.Fprintf(w, "重选阈值        : 健康 IP 少于 %d 个时整池重选\n", cfg.MinHealthyCount)
 	if cfg.Update.CheckEnabled {
@@ -1529,9 +1721,9 @@ func postPoolSpeedStatusText(speed PostPoolSpeedState) string {
 	if speed.InProgress {
 		if speed.Total > 0 {
 			if speed.CurrentIP != "" {
-				return fmt.Sprintf("测速中 %d/%d，当前 %s，已剔除 %d", speed.Checked, speed.Total, speed.CurrentIP, speed.Removed)
+				return fmt.Sprintf("测速中 %d/%d，当前 %s，跳过 %d，已剔除 %d", speed.Checked, speed.Total, speed.CurrentIP, speed.Skipped, speed.Removed)
 			}
-			return fmt.Sprintf("测速中 %d/%d，已剔除 %d", speed.Checked, speed.Total, speed.Removed)
+			return fmt.Sprintf("测速中 %d/%d，跳过 %d，已剔除 %d", speed.Checked, speed.Total, speed.Skipped, speed.Removed)
 		}
 		return "测速中"
 	}
@@ -1539,7 +1731,7 @@ func postPoolSpeedStatusText(speed PostPoolSpeedState) string {
 		return "已中断：" + speed.LastError
 	}
 	if speed.Completed {
-		return fmt.Sprintf("已完成，检测 %d 个，剔除 %d 个", speed.Checked, speed.Removed)
+		return fmt.Sprintf("已完成，检测 %d 个，跳过 %d 个，剔除 %d 个", speed.Checked, speed.Skipped, speed.Removed)
 	}
 	return "等待"
 }

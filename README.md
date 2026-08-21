@@ -54,10 +54,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.16.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.16/cfnat-linux-v0.17.16.tar.gz
+curl -fL -o cfnat-linux-v0.17.17.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.17/cfnat-linux-v0.17.17.tar.gz
 
-tar -xzf cfnat-linux-v0.17.16.tar.gz
+tar -xzf cfnat-linux-v0.17.17.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -154,7 +154,9 @@ Shodan IP Panel 的資料保存在：
 
 若啟用下載測速篩選，TCP 初篩完成後會按 TCP 延遲排序分批做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：每批按 `speed_test.concurrency` 並發下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續探測複篩。若本批通過數不足，會繼續處理下一批 TCP 可連候選；每批通過最終複篩的 IP 會先合併進健康池並熱更新 TCP 轉發，DNS 則仍等本輪掃描完成後再按同步策略更新。
 
-若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。Cloudflare DNS 會在這輪入池後篩選完成後再按最終轉發池同步，避免把剛剔除的低速 IP 同步出去。
+若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度、免測跳過數與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。測速達標的 IP 會即時加入 `post_pool_speed_test.exempt_list` 免測名單，後續入池後逐個測速會直接跳過，避免重複消耗時間。Cloudflare DNS 會在這輪入池後篩選完成後再按最終轉發池同步，避免把剛剔除的低速 IP 同步出去。
+
+若啟用黑名單 IP 定時測速，程式會按 `blacklist_speed_test.interval` 對 `ip_blacklist` 裡的單個 IP 做並發測速；速度達到 `post_pool_speed_test.min_mbps` 時會自動解除黑名單，並加入入池免測速名單。CIDR 黑名單不會展開測速，避免一次性產生過多候選。
 
 也可以直接使用命令：
 
@@ -250,6 +252,11 @@ DNS 同步分為兩類：
 | `post_pool_speed_test.min_mbps` | `1` | 入池後逐個測速最低速度，低於此值會從轉發池剔除 |
 | `post_pool_speed_test.timeout` | `5s` | 入池後單個 IP 最長測速時間 |
 | `post_pool_speed_test.auto_blacklist` | `false` | 入池後測速不達標的 IP 是否自動加入 `ip_blacklist` |
+| `post_pool_speed_test.exempt_list` | `[]` | 入池後測速免測名單；測速達標 IP 會自動加入，後續入池後測速會跳過 |
+| `blacklist_speed_test.enabled` | `false` | 是否定時對黑名單中的單個 IP 測速 |
+| `blacklist_speed_test.interval` | `30m` | 黑名單 IP 定時測速週期 |
+| `blacklist_speed_test.timeout` | `5s` | 黑名單中單個 IP 的測速時長 |
+| `blacklist_speed_test.concurrency` | `3` | 黑名單 IP 測速並發數 |
 | `management.password_enabled` | `false` | 是否啟用 `cfnatctl` 管理密碼 |
 | `management.password_sha256` | `""` | 管理密碼 SHA-256 雜湊 |
 | `update.check_enabled` | `true` | 是否定時檢查 GitHub Release 更新 |
@@ -305,7 +312,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.16
+make release VERSION=v0.17.17
 ```
 
 ## 命令列
