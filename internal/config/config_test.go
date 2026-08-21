@@ -75,10 +75,13 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if len(cfg.PostPoolSpeedTest.ExemptList) != 0 {
 		t.Fatalf("post-pool exempt list = %+v", cfg.PostPoolSpeedTest.ExemptList)
 	}
+	if len(cfg.PostPoolSpeedTest.ForceTestList) != 0 {
+		t.Fatalf("post-pool force-test list = %+v", cfg.PostPoolSpeedTest.ForceTestList)
+	}
 	if cfg.BlacklistSpeedTest.Enabled {
 		t.Fatal("expected blacklist speed test to be disabled after migration")
 	}
-	if cfg.BlacklistSpeedTest.Interval.Value() == 0 || cfg.BlacklistSpeedTest.Timeout.Value() == 0 || cfg.BlacklistSpeedTest.Concurrency != 3 {
+	if cfg.BlacklistSpeedTest.Interval.Value() != 24*time.Hour || cfg.BlacklistSpeedTest.Timeout.Value() == 0 || cfg.BlacklistSpeedTest.Concurrency != 3 {
 		t.Fatalf("blacklist speed config = %+v", cfg.BlacklistSpeedTest)
 	}
 	if !cfg.ScanIntervalEnabled {
@@ -276,11 +279,14 @@ func TestPostPoolSpeedTestSetAndValidation(t *testing.T) {
 	if err := Set(path, "post_pool_speed_test_exempt_list", "192.0.2.1\n198.51.100.0/24"); err != nil {
 		t.Fatal(err)
 	}
+	if err := Set(path, "post_pool_speed_test_force_test_list", "203.0.113.1"); err != nil {
+		t.Fatal(err)
+	}
 	got, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist || len(got.PostPoolSpeedTest.ExemptList) != 2 {
+	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist || len(got.PostPoolSpeedTest.ExemptList) != 2 || len(got.PostPoolSpeedTest.ForceTestList) != 1 {
 		t.Fatalf("post pool speed config = %+v", got.PostPoolSpeedTest)
 	}
 	if err := Set(path, "post_pool_speed_test_min_mbps", "0"); err == nil {
@@ -298,7 +304,7 @@ func TestBlacklistSpeedTestSetAndValidation(t *testing.T) {
 	if err := Set(path, "blacklist_speed_test_enabled", "true"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Set(path, "blacklist_speed_test_interval", "10m"); err != nil {
+	if err := Set(path, "blacklist_speed_test_interval", "10h"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Set(path, "blacklist_speed_test_timeout", "4s"); err != nil {
@@ -311,8 +317,11 @@ func TestBlacklistSpeedTestSetAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.BlacklistSpeedTest.Enabled || got.BlacklistSpeedTest.Interval.Value() != 10*time.Minute || got.BlacklistSpeedTest.Timeout.Value() != 4*time.Second || got.BlacklistSpeedTest.Concurrency != 6 {
+	if !got.BlacklistSpeedTest.Enabled || got.BlacklistSpeedTest.Interval.Value() != 10*time.Hour || got.BlacklistSpeedTest.Timeout.Value() != 4*time.Second || got.BlacklistSpeedTest.Concurrency != 6 {
 		t.Fatalf("blacklist speed config = %+v", got.BlacklistSpeedTest)
+	}
+	if err := Set(path, "blacklist_speed_test_interval", "30m"); err == nil {
+		t.Fatal("expected invalid non-hour blacklist speed interval")
 	}
 	if err := Set(path, "blacklist_speed_test_concurrency", "0"); err == nil {
 		t.Fatal("expected invalid blacklist speed concurrency")

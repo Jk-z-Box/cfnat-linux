@@ -591,7 +591,7 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 	testPool := make([]scanner.Result, 0, len(pool))
 	skipped := 0
 	for _, result := range pool {
-		if blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ExemptList) {
+		if blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ExemptList) && !blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ForceTestList) {
 			skipped++
 			continue
 		}
@@ -638,7 +638,8 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 
 		speed, err := scannerRef.DownloadSpeed(ctx, result.IP, cfg.PostPoolSpeedTest.Timeout.Value())
 		if err != nil || speed <= 0 || speed < cfg.PostPoolSpeedTest.MinMBps {
-			removedNow, syncNow := a.removeSlowPostPoolIP(result.IP, cfg.PostPoolSpeedTest.AutoBlacklist)
+			forceBlacklisted := blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ForceTestList)
+			removedNow, syncNow := a.removeSlowPostPoolIP(result.IP, cfg.PostPoolSpeedTest.AutoBlacklist, forceBlacklisted)
 			if syncNow {
 				dnsNeedsSync = true
 			}
@@ -657,7 +658,9 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 			a.saveState()
 			continue
 		}
-		a.addPostPoolSpeedExemptIP(result.IP)
+		if !blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ForceTestList) {
+			a.addPostPoolSpeedExemptIP(result.IP)
+		}
 		a.mu.Lock()
 		for j, current := range a.pool {
 			if current.IP == result.IP {
@@ -820,12 +823,14 @@ func (a *App) unblacklistRestoredIPs(restored []netip.Addr) {
 		}
 		newBlacklist = append(newBlacklist, item)
 	}
+	a.cfg.PostPoolSpeedTest.ExemptList = removeAddrsFromList(a.cfg.PostPoolSpeedTest.ExemptList, restoredSet)
 	for _, ip := range restored {
-		if !blacklistedAddr(ip, a.cfg.PostPoolSpeedTest.ExemptList) {
-			a.cfg.PostPoolSpeedTest.ExemptList = append(a.cfg.PostPoolSpeedTest.ExemptList, ip.String())
+		if !blacklistedAddr(ip, a.cfg.PostPoolSpeedTest.ForceTestList) {
+			a.cfg.PostPoolSpeedTest.ForceTestList = append(a.cfg.PostPoolSpeedTest.ForceTestList, ip.String())
 		}
 	}
 	exempt := append([]string(nil), a.cfg.PostPoolSpeedTest.ExemptList...)
+	forceTest := append([]string(nil), a.cfg.PostPoolSpeedTest.ForceTestList...)
 	a.cfg.IPBlacklist = newBlacklist
 	a.mu.Unlock()
 	if err := config.Set(a.configPath, "ip_blacklist", strings.Join(newBlacklist, "\n")); err != nil {
@@ -833,7 +838,10 @@ func (a *App) unblacklistRestoredIPs(restored []netip.Addr) {
 		return
 	}
 	if err := config.Set(a.configPath, "post_pool_speed_test_exempt_list", strings.Join(exempt, "\n")); err != nil {
-		a.logger.Error("黑名单恢复 IP 写入免测速名单失败", "restored", len(restored), "error", err)
+		a.logger.Error("黑名单恢复 IP 从免测速名单移除失败", "restored", len(restored), "error", err)
+	}
+	if err := config.Set(a.configPath, "post_pool_speed_test_force_test_list", strings.Join(forceTest, "\n")); err != nil {
+		a.logger.Error("黑名单恢复 IP 写入入池不免测速名单失败", "restored", len(restored), "error", err)
 	}
 	if cfg, err := config.Load(a.configPath); err == nil {
 		a.mu.Lock()
@@ -841,7 +849,19 @@ func (a *App) unblacklistRestoredIPs(restored []netip.Addr) {
 		a.scanner = scanner.New(cfg, a.logger)
 		a.mu.Unlock()
 	}
-	a.logger.Info("黑名单 IP 测速达标，已解除黑名单并加入免测速名单", "restored", removed)
+	a.logger.Info("黑名单 IP 测速达标，已解除黑名单并加入入池不免测速名单", "restored", removed)
+}
+
+func removeAddrsFromList(items []string, remove map[string]struct{}) []string {
+	filtered := make([]string, 0, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item)
+		if _, ok := remove[key]; ok {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }
 
 func blacklistExactIPs(items []string) []netip.Addr {
@@ -865,7 +885,7 @@ func blacklistExactIPs(items []string) []netip.Addr {
 	return ips
 }
 
-func (a *App) removeSlowPostPoolIP(ip netip.Addr, autoBlacklist bool) (int, bool) {
+func (a *App) removeSlowPostPoolIP(ip netip.Addr, autoBlacklist, forceBlacklist bool) (int, bool) {
 	a.mu.Lock()
 	oldSyncedIPs := append([]string(nil), a.state.DNS.SyncedIPs...)
 	removed := map[netip.Addr]struct{}{}
@@ -892,11 +912,18 @@ func (a *App) removeSlowPostPoolIP(ip netip.Addr, autoBlacklist bool) (int, bool
 		a.state.Status = "running"
 	}
 	blacklistChanged := false
-	if autoBlacklist && !containsString(a.cfg.IPBlacklist, ip.String()) {
+	if (autoBlacklist || forceBlacklist) && !containsString(a.cfg.IPBlacklist, ip.String()) {
 		a.cfg.IPBlacklist = append(a.cfg.IPBlacklist, ip.String())
 		blacklistChanged = true
 	}
 	blacklist := append([]string(nil), a.cfg.IPBlacklist...)
+	forceChanged := false
+	if forceBlacklist {
+		before := len(a.cfg.PostPoolSpeedTest.ForceTestList)
+		a.cfg.PostPoolSpeedTest.ForceTestList = removeAddrsFromList(a.cfg.PostPoolSpeedTest.ForceTestList, map[string]struct{}{ip.String(): {}})
+		forceChanged = len(a.cfg.PostPoolSpeedTest.ForceTestList) != before
+	}
+	forceTest := append([]string(nil), a.cfg.PostPoolSpeedTest.ForceTestList...)
 	dnsNeedsSync := a.shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, a.desiredDNSIPsLocked(), removed, time.Now())
 	a.mu.Unlock()
 
@@ -910,6 +937,17 @@ func (a *App) removeSlowPostPoolIP(ip netip.Addr, autoBlacklist bool) (int, bool
 			a.scanner = scanner.New(cfg, a.logger)
 			a.mu.Unlock()
 			a.logger.Warn("入池后测速低速 IP 已实时加入黑名单", "ip", ip.String())
+		}
+	}
+	if forceChanged {
+		if err := config.Set(a.configPath, "post_pool_speed_test_force_test_list", strings.Join(forceTest, "\n")); err != nil {
+			a.logger.Error("入池不免测速 IP 迁移黑名单后更新名单失败", "ip", ip.String(), "error", err)
+		} else if cfg, err := config.Load(a.configPath); err == nil {
+			a.mu.Lock()
+			a.cfg = cfg
+			a.scanner = scanner.New(cfg, a.logger)
+			a.mu.Unlock()
+			a.logger.Warn("入池不免测速 IP 不达标，已迁移到黑名单", "ip", ip.String())
 		}
 	}
 	return 1, dnsNeedsSync
@@ -1616,7 +1654,7 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 		fmt.Fprintln(w, "测速筛选        : 未启用")
 	}
 	if cfg.PostPoolSpeedTest.Enabled {
-		fmt.Fprintf(w, "入池后测速      : ≥ %.2f MB/s，单 IP %s，自动黑名单 %s，免测 %d 个\n", cfg.PostPoolSpeedTest.MinMBps, cfg.PostPoolSpeedTest.Timeout.Value(), boolLabel(cfg.PostPoolSpeedTest.AutoBlacklist), len(cfg.PostPoolSpeedTest.ExemptList))
+		fmt.Fprintf(w, "入池后测速      : ≥ %.2f MB/s，单 IP %s，自动黑名单 %s，免测 %d 个，不免测 %d 个\n", cfg.PostPoolSpeedTest.MinMBps, cfg.PostPoolSpeedTest.Timeout.Value(), boolLabel(cfg.PostPoolSpeedTest.AutoBlacklist), len(cfg.PostPoolSpeedTest.ExemptList), len(cfg.PostPoolSpeedTest.ForceTestList))
 	} else {
 		fmt.Fprintln(w, "入池后测速      : 未启用")
 	}

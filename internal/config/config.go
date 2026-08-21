@@ -64,6 +64,7 @@ type PostPoolSpeedTestConfig struct {
 	Timeout       Duration `json:"timeout"`
 	AutoBlacklist bool     `json:"auto_blacklist"`
 	ExemptList    []string `json:"exempt_list"`
+	ForceTestList []string `json:"force_test_list"`
 }
 
 type BlacklistSpeedTestConfig struct {
@@ -144,7 +145,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          16,
+		ConfigVersion:          17,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -184,10 +185,10 @@ func Defaults() Config {
 			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50, Concurrency: 3,
 		},
 		PostPoolSpeedTest: PostPoolSpeedTestConfig{
-			Enabled: false, MinMBps: 1, Timeout: Duration(5 * time.Second), AutoBlacklist: false, ExemptList: []string{},
+			Enabled: false, MinMBps: 1, Timeout: Duration(5 * time.Second), AutoBlacklist: false, ExemptList: []string{}, ForceTestList: []string{},
 		},
 		BlacklistSpeedTest: BlacklistSpeedTestConfig{
-			Enabled: false, Interval: Duration(30 * time.Minute), Timeout: Duration(5 * time.Second), Concurrency: 3,
+			Enabled: false, Interval: Duration(24 * time.Hour), Timeout: Duration(5 * time.Second), Concurrency: 3,
 		},
 		Management: ManagementConfig{PasswordEnabled: false},
 		Update: UpdateConfig{
@@ -307,7 +308,7 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["post_pool_speed_test"]; !ok {
 		raw["post_pool_speed_test"] = map[string]any{
-			"enabled": false, "min_mbps": 1, "timeout": "5s", "auto_blacklist": false, "exempt_list": []any{},
+			"enabled": false, "min_mbps": 1, "timeout": "5s", "auto_blacklist": false, "exempt_list": []any{}, "force_test_list": []any{},
 		}
 		changed = true
 	} else if post, ok := raw["post_pool_speed_test"].(map[string]any); ok {
@@ -331,10 +332,14 @@ func Migrate(path string) (bool, error) {
 			post["exempt_list"] = []any{}
 			changed = true
 		}
+		if _, ok := post["force_test_list"]; !ok {
+			post["force_test_list"] = []any{}
+			changed = true
+		}
 	}
 	if _, ok := raw["blacklist_speed_test"]; !ok {
 		raw["blacklist_speed_test"] = map[string]any{
-			"enabled": false, "interval": "30m", "timeout": "5s", "concurrency": 3,
+			"enabled": false, "interval": "24h", "timeout": "5s", "concurrency": 3,
 		}
 		changed = true
 	} else if black, ok := raw["blacklist_speed_test"].(map[string]any); ok {
@@ -343,7 +348,10 @@ func Migrate(path string) (bool, error) {
 			changed = true
 		}
 		if _, ok := black["interval"]; !ok {
-			black["interval"] = "30m"
+			black["interval"] = "24h"
+			changed = true
+		} else if interval, ok := black["interval"].(string); ok && interval == "30m" {
+			black["interval"] = "24h"
 			changed = true
 		}
 		if _, ok := black["timeout"]; !ok {
@@ -403,8 +411,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 16 {
-		raw["config_version"] = 16
+	if version, _ := raw["config_version"].(float64); int(version) < 17 {
+		raw["config_version"] = 17
 		changed = true
 	}
 	if !changed {
@@ -591,6 +599,8 @@ func Set(path, key, value string) error {
 		cfg.PostPoolSpeedTest.AutoBlacklist = parsed
 	case "post_pool_speed_test_exempt_list":
 		cfg.PostPoolSpeedTest.ExemptList = splitNonEmptyLines(value)
+	case "post_pool_speed_test_force_test_list":
+		cfg.PostPoolSpeedTest.ForceTestList = splitNonEmptyLines(value)
 	case "blacklist_speed_test_enabled":
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
@@ -600,7 +610,7 @@ func Set(path, key, value string) error {
 	case "blacklist_speed_test_interval":
 		parsed, err := time.ParseDuration(value)
 		if err != nil {
-			return errors.New("blacklist_speed_test.interval 格式无效，请使用 30m、1h 等格式")
+			return errors.New("blacklist_speed_test.interval 格式无效，请使用 1h、24h 等小时格式")
 		}
 		cfg.BlacklistSpeedTest.Interval = Duration(parsed)
 	case "blacklist_speed_test_timeout":
@@ -711,6 +721,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("post_pool_speed_test.exempt_list 包含无效 IP 或 CIDR: %q", item)
 		}
 	}
+	for _, item := range c.PostPoolSpeedTest.ForceTestList {
+		if _, err := netipOrPrefix(item); err != nil {
+			return fmt.Errorf("post_pool_speed_test.force_test_list 包含无效 IP 或 CIDR: %q", item)
+		}
+	}
 	if c.MaxCandidates < 1 || c.Concurrency < 1 || c.ValidIPCount < 1 || c.PoolSize < 1 || c.MinHealthyCount < 1 {
 		return errors.New("候选数、并发数、有效 IP 数、池大小和最小健康 IP 数必须大于 0")
 	}
@@ -789,6 +804,9 @@ func (c *Config) Validate() error {
 	if c.BlacklistSpeedTest.Enabled {
 		if c.BlacklistSpeedTest.Interval.Value() <= 0 {
 			return errors.New("blacklist_speed_test.interval 必须大于 0")
+		}
+		if c.BlacklistSpeedTest.Interval.Value()%time.Hour != 0 {
+			return errors.New("blacklist_speed_test.interval 必须以小时为单位，例如 1h、24h")
 		}
 		if c.BlacklistSpeedTest.Timeout.Value() <= 0 {
 			return errors.New("blacklist_speed_test.timeout 必须大于 0")
