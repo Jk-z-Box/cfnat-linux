@@ -1,5 +1,5 @@
 {
-  "config_version": 18,
+  "config_version": 19,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [

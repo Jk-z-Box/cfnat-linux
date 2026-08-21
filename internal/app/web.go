@@ -471,6 +471,17 @@ func (w *webServer) handleCFNatConfigFile(rw http.ResponseWriter, r *http.Reques
 		w.render(rw, fmt.Sprintf("配置文件验证失败：%s\n%s", err, string(out)))
 		return
 	}
+	normalizedCfg, err := config.Load(tmpPath)
+	if err != nil {
+		w.render(rw, "配置文件验证失败："+err.Error())
+		return
+	}
+	normalizedContent, err := json.MarshalIndent(normalizedCfg, "", "  ")
+	if err != nil {
+		w.render(rw, "配置文件保存失败："+err.Error())
+		return
+	}
+	content = string(append(normalizedContent, '\n'))
 	old, _ := os.ReadFile(w.app.configPath)
 	info, err := os.Stat(w.app.configPath)
 	if err != nil {

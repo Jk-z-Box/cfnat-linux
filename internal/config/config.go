@@ -145,7 +145,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          18,
+		ConfigVersion:          19,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -211,6 +211,7 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return cfg, err
 	}
+	cfg.normalizeExclusiveLists()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
@@ -414,8 +415,11 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 18 {
-		raw["config_version"] = 18
+	if version, _ := raw["config_version"].(float64); int(version) < 19 {
+		raw["config_version"] = 19
+		changed = true
+	}
+	if normalizeRawExclusiveLists(raw) {
 		changed = true
 	}
 	if !changed {
@@ -631,6 +635,7 @@ func Set(path, key, value string) error {
 	default:
 		return fmt.Errorf("不允许修改的配置项: %s", key)
 	}
+	cfg.normalizeExclusiveLists()
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -656,6 +661,123 @@ func splitNonEmptyLines(value string) []string {
 		}
 	}
 	return items
+}
+
+func normalizeRawExclusiveLists(raw map[string]any) bool {
+	cfg := Defaults()
+	data, err := json.Marshal(raw)
+	if err != nil || json.Unmarshal(data, &cfg) != nil {
+		return false
+	}
+	oldBlacklist := append([]string(nil), cfg.IPBlacklist...)
+	oldForce := append([]string(nil), cfg.PostPoolSpeedTest.ForceTestList...)
+	oldExempt := append([]string(nil), cfg.PostPoolSpeedTest.ExemptList...)
+	cfg.normalizeExclusiveLists()
+	changed := !equalStringSlices(oldBlacklist, cfg.IPBlacklist) ||
+		!equalStringSlices(oldForce, cfg.PostPoolSpeedTest.ForceTestList) ||
+		!equalStringSlices(oldExempt, cfg.PostPoolSpeedTest.ExemptList)
+	if !changed {
+		return false
+	}
+	raw["ip_blacklist"] = cfg.IPBlacklist
+	post, ok := raw["post_pool_speed_test"].(map[string]any)
+	if !ok {
+		post = map[string]any{}
+		raw["post_pool_speed_test"] = post
+	}
+	post["exempt_list"] = cfg.PostPoolSpeedTest.ExemptList
+	post["force_test_list"] = cfg.PostPoolSpeedTest.ForceTestList
+	return true
+}
+
+func (c *Config) normalizeExclusiveLists() {
+	c.IPBlacklist = normalizeList(c.IPBlacklist)
+	c.PostPoolSpeedTest.ForceTestList = filterCoveredEntries(normalizeList(c.PostPoolSpeedTest.ForceTestList), c.IPBlacklist)
+	higher := append([]string(nil), c.IPBlacklist...)
+	higher = append(higher, c.PostPoolSpeedTest.ForceTestList...)
+	c.PostPoolSpeedTest.ExemptList = filterCoveredEntries(normalizeList(c.PostPoolSpeedTest.ExemptList), higher)
+}
+
+func normalizeList(items []string) []string {
+	normalized := make([]string, 0, len(items))
+	seen := map[string]struct{}{}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		key := strings.ToLower(item)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, item)
+	}
+	return normalized
+}
+
+func filterCoveredEntries(items, higher []string) []string {
+	filtered := make([]string, 0, len(items))
+	for _, item := range items {
+		if entryCoveredBy(item, higher) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func entryCoveredBy(item string, higher []string) bool {
+	for _, high := range higher {
+		if entriesOverlapOrCover(strings.TrimSpace(item), strings.TrimSpace(high)) {
+			return true
+		}
+	}
+	return false
+}
+
+func entriesOverlapOrCover(item, high string) bool {
+	if item == "" || high == "" {
+		return false
+	}
+	itemIsPrefix, itemAddr, itemPrefix, itemOK := parseAddrOrPrefix(item)
+	highIsPrefix, highAddr, highPrefix, highOK := parseAddrOrPrefix(high)
+	if !itemOK || !highOK {
+		return strings.EqualFold(item, high)
+	}
+	if !itemIsPrefix && !highIsPrefix {
+		return itemAddr == highAddr
+	}
+	if !itemIsPrefix && highIsPrefix {
+		return highPrefix.Masked().Contains(itemAddr)
+	}
+	if itemIsPrefix && highIsPrefix {
+		hp := highPrefix.Masked()
+		ip := itemPrefix.Masked()
+		return hp.Bits() <= ip.Bits() && hp.Contains(ip.Addr())
+	}
+	return false
+}
+
+func parseAddrOrPrefix(value string) (bool, netip.Addr, netip.Prefix, bool) {
+	if strings.Contains(value, "/") {
+		prefix, err := netip.ParsePrefix(value)
+		return true, netip.Addr{}, prefix, err == nil
+	}
+	addr, err := netip.ParseAddr(value)
+	return false, addr, netip.Prefix{}, err == nil
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeProbeMode(value string) string {
