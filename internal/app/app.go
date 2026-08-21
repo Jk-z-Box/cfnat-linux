@@ -737,7 +737,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	removed := make(map[netip.Addr]struct{})
 	checkedByIP := make(map[netip.Addr]scanner.Result, len(pool))
 	for _, result := range pool {
-		checked, err := a.scanner.Probe(checkCtx, result.IP)
+		checked, err := a.scanner.ProbeWithMode(checkCtx, result.IP, a.cfg.HealthProbeMode)
 		a.mu.Lock()
 		targetIndex := -1
 		for i := range a.state.Targets {
@@ -916,7 +916,7 @@ func (a *App) checkRecoveryPool(ctx context.Context) healthStatus {
 		if at, ok := recoveryAt[result.IP]; ok && now.Sub(at) < a.cfg.RecoveryCooldown.Value() {
 			continue
 		}
-		checked, err := a.scanner.Probe(checkCtx, result.IP)
+		checked, err := a.scanner.ProbeWithMode(checkCtx, result.IP, a.cfg.RecoveryProbeMode)
 		if err != nil {
 			a.mu.Lock()
 			a.recoveryOK[result.IP] = 0

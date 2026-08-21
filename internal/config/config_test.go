@@ -98,6 +98,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.ProbeMode != "http" {
 		t.Fatalf("probe mode = %q", cfg.ProbeMode)
 	}
+	if cfg.ScanProbeMode != "http" || cfg.HealthProbeMode != "http" || cfg.RecoveryProbeMode != "http" {
+		t.Fatalf("probe modes = scan:%q health:%q recovery:%q", cfg.ScanProbeMode, cfg.HealthProbeMode, cfg.RecoveryProbeMode)
+	}
 }
 
 func TestDNSRecordTypeAuto(t *testing.T) {
@@ -187,11 +190,30 @@ func TestProbeModeAliasesAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ProbeMode != "tcp" {
-		t.Fatalf("probe mode = %q", got.ProbeMode)
+	if got.ProbeMode != "tcp" || got.ScanProbeMode != "tcp" || got.HealthProbeMode != "tcp" || got.RecoveryProbeMode != "tcp" {
+		t.Fatalf("probe modes = %q/%q/%q/%q", got.ProbeMode, got.ScanProbeMode, got.HealthProbeMode, got.RecoveryProbeMode)
+	}
+	if err := Set(path, "scan_probe_mode", "http"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "health_probe_mode", "ping"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "recovery_probe_mode", "tcping"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ScanProbeMode != "http" || got.HealthProbeMode != "icmp" || got.RecoveryProbeMode != "tcp" {
+		t.Fatalf("independent probe modes = scan:%q health:%q recovery:%q", got.ScanProbeMode, got.HealthProbeMode, got.RecoveryProbeMode)
 	}
 	if err := Set(path, "probe_mode", "bad"); err == nil {
 		t.Fatal("expected invalid probe mode error")
+	}
+	if err := Set(path, "health_probe_mode", "bad"); err == nil {
+		t.Fatal("expected invalid health probe mode error")
 	}
 }
 

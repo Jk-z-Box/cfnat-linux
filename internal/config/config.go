@@ -101,6 +101,9 @@ type Config struct {
 	CheckURL               string           `json:"check_url"`
 	ExpectedStatus         int              `json:"expected_status"`
 	ProbeMode              string           `json:"probe_mode"`
+	ScanProbeMode          string           `json:"scan_probe_mode"`
+	HealthProbeMode        string           `json:"health_probe_mode"`
+	RecoveryProbeMode      string           `json:"recovery_probe_mode"`
 	MaxLatency             Duration         `json:"max_latency"`
 	DialTimeout            Duration         `json:"dial_timeout"`
 	Colos                  []string         `json:"colos"`
@@ -140,6 +143,9 @@ func Defaults() Config {
 		CheckURL:               "https://cloudflare.com/cdn-cgi/trace",
 		ExpectedStatus:         200,
 		ProbeMode:              "http",
+		ScanProbeMode:          "http",
+		HealthProbeMode:        "http",
+		RecoveryProbeMode:      "http",
 		MaxLatency:             Duration(800 * time.Millisecond),
 		DialTimeout:            Duration(3 * time.Second),
 		ScanIntervalEnabled:    true,
@@ -181,8 +187,11 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return cfg, err
 	}
-	cfg.ProbeMode = normalizeProbeMode(cfg.ProbeMode)
-	return cfg, cfg.Validate()
+	if err := cfg.Validate(); err != nil {
+		return cfg, err
+	}
+	cfg.normalizeProbeModes()
+	return cfg, nil
 }
 
 // Migrate upgrades only defaults known to be broken. User-selected endpoints are preserved.
@@ -221,6 +230,22 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["probe_mode"]; !ok {
 		raw["probe_mode"] = "http"
+		changed = true
+	}
+	probeMode := "http"
+	if value, ok := raw["probe_mode"].(string); ok && strings.TrimSpace(value) != "" {
+		probeMode = value
+	}
+	if _, ok := raw["scan_probe_mode"]; !ok {
+		raw["scan_probe_mode"] = probeMode
+		changed = true
+	}
+	if _, ok := raw["health_probe_mode"]; !ok {
+		raw["health_probe_mode"] = probeMode
+		changed = true
+	}
+	if _, ok := raw["recovery_probe_mode"]; !ok {
+		raw["recovery_probe_mode"] = probeMode
 		changed = true
 	}
 	if _, ok := raw["recovery_cooldown"]; !ok {
@@ -356,6 +381,15 @@ func Set(path, key, value string) error {
 		cfg.MaxLatency = Duration(parsed)
 	case "probe_mode":
 		cfg.ProbeMode = strings.TrimSpace(value)
+		cfg.ScanProbeMode = strings.TrimSpace(value)
+		cfg.HealthProbeMode = strings.TrimSpace(value)
+		cfg.RecoveryProbeMode = strings.TrimSpace(value)
+	case "scan_probe_mode":
+		cfg.ScanProbeMode = strings.TrimSpace(value)
+	case "health_probe_mode":
+		cfg.HealthProbeMode = strings.TrimSpace(value)
+	case "recovery_probe_mode":
+		cfg.RecoveryProbeMode = strings.TrimSpace(value)
 	case "min_healthy_count":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
@@ -464,7 +498,7 @@ func Set(path, key, value string) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	cfg.ProbeMode = normalizeProbeMode(cfg.ProbeMode)
+	cfg.normalizeProbeModes()
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -499,6 +533,31 @@ func normalizeProbeMode(value string) string {
 	default:
 		return ""
 	}
+}
+
+func (c *Config) normalizeProbeModes() {
+	c.ProbeMode = normalizeProbeMode(c.ProbeMode)
+	if strings.TrimSpace(c.ScanProbeMode) == "" {
+		c.ScanProbeMode = c.ProbeMode
+	}
+	if strings.TrimSpace(c.HealthProbeMode) == "" {
+		c.HealthProbeMode = c.ProbeMode
+	}
+	if strings.TrimSpace(c.RecoveryProbeMode) == "" {
+		c.RecoveryProbeMode = c.HealthProbeMode
+	}
+	c.ScanProbeMode = normalizeProbeMode(c.ScanProbeMode)
+	c.HealthProbeMode = normalizeProbeMode(c.HealthProbeMode)
+	c.RecoveryProbeMode = normalizeProbeMode(c.RecoveryProbeMode)
+}
+
+func validateProbeModeField(name, value string) error {
+	raw := strings.TrimSpace(value)
+	mode := normalizeProbeMode(raw)
+	if mode == "" || raw == "" && value != "" {
+		return fmt.Errorf("%s 只能是 http、tcp/tcping 或 icmp/ping", name)
+	}
+	return nil
 }
 
 func (c *Config) Validate() error {
@@ -536,10 +595,17 @@ func (c *Config) Validate() error {
 	if c.TargetPort < 1 || c.TargetPort > 65535 {
 		return errors.New("target_port 超出范围")
 	}
-	probeModeRaw := strings.TrimSpace(c.ProbeMode)
-	probeMode := normalizeProbeMode(probeModeRaw)
-	if probeMode == "" || probeModeRaw == "" && c.ProbeMode != "" {
-		return errors.New("probe_mode 只能是 http、tcp/tcping 或 icmp/ping")
+	if err := validateProbeModeField("probe_mode", c.ProbeMode); err != nil {
+		return err
+	}
+	if err := validateProbeModeField("scan_probe_mode", c.ScanProbeMode); err != nil {
+		return err
+	}
+	if err := validateProbeModeField("health_probe_mode", c.HealthProbeMode); err != nil {
+		return err
+	}
+	if err := validateProbeModeField("recovery_probe_mode", c.RecoveryProbeMode); err != nil {
+		return err
 	}
 	if c.RecoverySuccesses < 1 {
 		return errors.New("recovery_successes 必须大于 0")

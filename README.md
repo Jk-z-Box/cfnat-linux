@@ -8,7 +8,7 @@
 - 隨機抽樣或依順序展開候選 IP。
 - 分批掃描：先進行輕量 TCP 初篩，再按延遲分批執行下載測速與可配置探測複篩；前一批不足時會繼續處理後續 TCP 可連候選，避免多 IP 源場景只檢查前 200 個就失敗。
 - 可選下載測速篩選：TCP 初篩後按批次對低延遲候選 IP 進行下載測速，低於指定 MB/s 或無速度的 IP 直接剔除；若本批不足，會繼續測試下一批。
-- 延遲/健康檢測方式可在 Web「優選與健康」中選擇 HTTP/TLS、TCPing 或 ICMP Ping；預設仍為 HTTP/TLS。
+- 掃描復篩、健康/延遲監控、冷卻恢復池三個檢測環節可在 Web「優選與健康」中分別選擇 HTTP/TLS、TCPing 或 ICMP Ping；預設仍為 HTTP/TLS。
 - IP 黑名單保存後會即時套用到目前轉發池和冷卻恢復池，命中的 IP 會立即剔除並熱更新轉發。
 - 可透過 `/cdn-cgi/trace` 依 Cloudflare `colo` 篩選資料中心。
 - 維護低延遲目標池，依最新延遲排序；掃描過程中每批通過複篩的 IP 會先合併進健康池並熱更新轉發，新連線始終優先連線目前延遲最低的 IP，失敗時再依序 fallback。
@@ -53,10 +53,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.13.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.13/cfnat-linux-v0.17.13.tar.gz
+curl -fL -o cfnat-linux-v0.17.14.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.14/cfnat-linux-v0.17.14.tar.gz
 
-tar -xzf cfnat-linux-v0.17.13.tar.gz
+tar -xzf cfnat-linux-v0.17.14.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -223,8 +223,11 @@ DNS 同步分為兩類：
 | `target_port` | `443` | 上游 Cloudflare 連接埠 |
 | `check_url` | `https://cloudflare.com/cdn-cgi/trace` | HTTP 狀態檢查位址及 TLS SNI 來源 |
 | `expected_status` | `200` | 期望回應碼 |
-| `probe_mode` | `http` | 延遲/健康檢測方式：`http`/`https` 為 HTTP/TLS 探測，`tcp`/`tcping` 為 TCPing，`icmp`/`ping` 為 ICMP Ping |
-| `max_latency` | `800ms` | 依 `probe_mode` 測得的最大延遲；超過閾值的 IP 直接淘汰 |
+| `probe_mode` | `http` | 舊版兼容欄位；透過命令列設定時會同步套用到以下三個獨立檢測方式 |
+| `scan_probe_mode` | `http` | 掃描復篩檢測方式：`http`/`https` 為 HTTP/TLS 探測，`tcp`/`tcping` 為 TCPing，`icmp`/`ping` 為 ICMP Ping |
+| `health_probe_mode` | `http` | 池內健康檢查與延遲排序檢測方式 |
+| `recovery_probe_mode` | `http` | 冷卻恢復池恢復檢測方式 |
+| `max_latency` | `800ms` | 依各環節檢測方式測得的最大延遲；超過閾值的 IP 直接淘汰 |
 | `colos` | `[]` | 例如 `HKG`、`NRT`、`SJC`；空陣列不篩選 |
 | `scan_interval_enabled` | `true` | 是否啟用定期完整重選 |
 | `scan_interval` | `6h` | 定期完整重選週期 |
@@ -295,7 +298,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.13
+make release VERSION=v0.17.14
 ```
 
 ## 命令列

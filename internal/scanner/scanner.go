@@ -176,7 +176,7 @@ func (s *Scanner) probeCandidates(ctx context.Context, candidates []netip.Addr, 
 		go func() {
 			defer wg.Done()
 			for ip := range jobs {
-				result, err := s.Probe(scanCtx, ip)
+				result, err := s.ProbeWithMode(scanCtx, ip, s.cfg.ScanProbeMode)
 				if err == nil {
 					results <- result
 				} else {
@@ -490,7 +490,11 @@ func (s *Scanner) rankTCP(ctx context.Context, candidates []netip.Addr) ([]ranke
 }
 
 func (s *Scanner) Probe(ctx context.Context, ip netip.Addr) (Result, error) {
-	switch s.cfg.ProbeMode {
+	return s.ProbeWithMode(ctx, ip, s.cfg.ProbeMode)
+}
+
+func (s *Scanner) ProbeWithMode(ctx context.Context, ip netip.Addr, mode string) (Result, error) {
+	switch mode {
 	case "tcp":
 		return s.probeTCP(ctx, ip)
 	case "icmp":
