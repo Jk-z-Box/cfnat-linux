@@ -8,6 +8,7 @@
 - 隨機抽樣或依順序展開候選 IP。
 - 分批掃描：先進行輕量 TCP 初篩，再按延遲分批執行下載測速與可配置探測複篩；前一批不足時會繼續處理後續 TCP 可連候選，避免多 IP 源場景只檢查前 200 個就失敗。
 - 可選下載測速篩選：TCP 初篩後按批次對低延遲候選 IP 進行下載測速，低於指定 MB/s 或無速度的 IP 直接剔除；若本批不足，會繼續測試下一批。
+- 可選入池後逐個測速篩選：掃描完成並熱更新轉發池後，對池內 IP 再逐個做一輪下載測速；低於指定 MB/s 或無速度的 IP 會立即從轉發池剔除，並可選自動加入 IP 黑名單。
 - 掃描復篩、健康/延遲監控、冷卻恢復池三個檢測環節可在 Web「優選與健康」中分別選擇 HTTP/TLS、TCPing 或 ICMP Ping；預設仍為 HTTP/TLS。
 - IP 黑名單保存後會即時套用到目前轉發池和冷卻恢復池，命中的 IP 會立即剔除並熱更新轉發。
 - 可透過 `/cdn-cgi/trace` 依 Cloudflare `colo` 篩選資料中心。
@@ -53,10 +54,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.14.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.14/cfnat-linux-v0.17.14.tar.gz
+curl -fL -o cfnat-linux-v0.17.15.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.15/cfnat-linux-v0.17.15.tar.gz
 
-tar -xzf cfnat-linux-v0.17.14.tar.gz
+tar -xzf cfnat-linux-v0.17.15.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -153,6 +154,8 @@ Shodan IP Panel 的資料保存在：
 
 若啟用下載測速篩選，TCP 初篩完成後會按 TCP 延遲排序分批做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：每批按 `speed_test.concurrency` 並發下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續探測複篩。若本批通過數不足，會繼續處理下一批 TCP 可連候選；每批通過最終複篩的 IP 會先合併進健康池並熱更新 TCP 轉發，DNS 則仍等本輪掃描完成後再按同步策略更新。
 
+若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會同步寫入 `ip_blacklist`，後續掃描不再使用。Cloudflare DNS 會在這輪入池後篩選完成後再按最終轉發池同步，避免把剛剔除的低速 IP 同步出去。
+
 也可以直接使用命令：
 
 ```bash
@@ -243,6 +246,10 @@ DNS 同步分為兩類：
 | `speed_test.timeout` | `10s` | 單個 IP 下載測速時間 |
 | `speed_test.max_candidates` | `50` | 每批最多測速的候選 IP 數；多 IP 源時會分批繼續處理後續 TCP 可連候選 |
 | `speed_test.concurrency` | `3` | 下載測速並發數 |
+| `post_pool_speed_test.enabled` | `false` | 是否在掃描完成、IP 進入轉發池後再逐個測速 |
+| `post_pool_speed_test.min_mbps` | `1` | 入池後逐個測速最低速度，低於此值會從轉發池剔除 |
+| `post_pool_speed_test.timeout` | `5s` | 入池後單個 IP 最長測速時間 |
+| `post_pool_speed_test.auto_blacklist` | `false` | 入池後測速不達標的 IP 是否自動加入 `ip_blacklist` |
 | `management.password_enabled` | `false` | 是否啟用 `cfnatctl` 管理密碼 |
 | `management.password_sha256` | `""` | 管理密碼 SHA-256 雜湊 |
 | `update.check_enabled` | `true` | 是否定時檢查 GitHub Release 更新 |
@@ -298,7 +305,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.14
+make release VERSION=v0.17.15
 ```
 
 ## 命令列

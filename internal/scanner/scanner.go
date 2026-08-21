@@ -259,7 +259,7 @@ func (s *Scanner) filterByDownloadSpeed(ctx context.Context, candidates []netip.
 		go func() {
 			defer wg.Done()
 			for job := range jobs {
-				speed, err := s.downloadSpeed(testCtx, job.ip)
+				speed, err := s.DownloadSpeed(testCtx, job.ip, s.cfg.SpeedTest.Timeout.Value())
 				select {
 				case results <- speedResult{index: job.index, ip: job.ip, speed: speed, err: err}:
 				case <-testCtx.Done():
@@ -362,7 +362,7 @@ func classifySpeedError(err error) string {
 	}
 }
 
-func (s *Scanner) downloadSpeed(ctx context.Context, ip netip.Addr) (float64, error) {
+func (s *Scanner) DownloadSpeed(ctx context.Context, ip netip.Addr, timeout time.Duration) (float64, error) {
 	u, err := url.Parse(s.cfg.SpeedTest.URL)
 	if err != nil {
 		return 0, err
@@ -386,7 +386,7 @@ func (s *Scanner) downloadSpeed(ctx context.Context, ip netip.Addr) (float64, er
 	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport}
-	testCtx, cancel := context.WithTimeout(ctx, s.cfg.SpeedTest.Timeout.Value())
+	testCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(testCtx, http.MethodGet, s.cfg.SpeedTest.URL, nil)
 	if err != nil {

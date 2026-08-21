@@ -62,6 +62,15 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.SpeedTest.Concurrency != 3 {
 		t.Fatalf("speed concurrency = %d", cfg.SpeedTest.Concurrency)
 	}
+	if cfg.PostPoolSpeedTest.Enabled {
+		t.Fatal("expected post-pool speed test to be disabled after migration")
+	}
+	if cfg.PostPoolSpeedTest.MinMBps != 1 {
+		t.Fatalf("post-pool min speed = %f", cfg.PostPoolSpeedTest.MinMBps)
+	}
+	if cfg.PostPoolSpeedTest.Timeout.Value() == 0 {
+		t.Fatal("expected post-pool speed timeout after migration")
+	}
 	if !cfg.ScanIntervalEnabled {
 		t.Fatal("expected scan interval to be enabled after migration")
 	}
@@ -232,6 +241,37 @@ func TestRejectInvalidSpeedTestConcurrency(t *testing.T) {
 	cfg.SpeedTest.Concurrency = 0
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected speed concurrency validation error")
+	}
+}
+
+func TestPostPoolSpeedTestSetAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Defaults()
+	data, _ := json.Marshal(cfg)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "post_pool_speed_test_enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "post_pool_speed_test_min_mbps", "0.5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "post_pool_speed_test_timeout", "3s"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "post_pool_speed_test_auto_blacklist", "true"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist {
+		t.Fatalf("post pool speed config = %+v", got.PostPoolSpeedTest)
+	}
+	if err := Set(path, "post_pool_speed_test_min_mbps", "0"); err == nil {
+		t.Fatal("expected invalid post-pool speed threshold")
 	}
 }
 

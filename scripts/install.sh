@@ -392,6 +392,12 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "max_candidates": ${SPEED_TEST_MAX_CANDIDATES},
     "concurrency": ${SPEED_TEST_CONCURRENCY}
   },
+  "post_pool_speed_test": {
+    "enabled": false,
+    "min_mbps": 1,
+    "timeout": "5s",
+    "auto_blacklist": false
+  },
   "management": {
     "password_enabled": false,
     "password_sha256": ""

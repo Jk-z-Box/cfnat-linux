@@ -390,11 +390,6 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	a.state.Scan.Completed = true
 	a.state.Scan.CompletedAt = &completed
 	a.state.Scan.LastError = ""
-	dnsNeedsSync := a.shouldSyncDNSAfterFinalScanLocked()
-	if dnsNeedsSync {
-		a.state.DNS.Synced = false
-		a.state.DNS.LastError = "同步中"
-	}
 	a.mu.Unlock()
 	a.proxy.Update(pool)
 	if strategy == "keep_healthy_fill" {
@@ -404,6 +399,17 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	}
 	a.saveState()
 
+	postSpeedDNSNeedsSync := a.runPostPoolSpeedTest(ctx)
+	a.mu.Lock()
+	dnsNeedsSync := postSpeedDNSNeedsSync || a.shouldSyncDNSAfterFinalScanLocked()
+	if dnsNeedsSync {
+		a.state.DNS.Synced = false
+		a.state.DNS.LastError = "同步中"
+	}
+	a.mu.Unlock()
+	if dnsNeedsSync {
+		a.saveState()
+	}
 	if dnsNeedsSync {
 		a.syncDNS(ctx)
 	}
@@ -548,6 +554,114 @@ func (a *App) applyBlacklistNow() (int, bool) {
 	a.saveState()
 	a.logger.Info("黑名单已实时应用到转发池", "removed", len(removed), "remaining", len(pool))
 	return len(removed), dnsNeedsSync
+}
+
+func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
+	a.mu.Lock()
+	cfg := a.cfg
+	if !cfg.PostPoolSpeedTest.Enabled {
+		a.mu.Unlock()
+		return false
+	}
+	pool := append([]scanner.Result(nil), a.pool...)
+	scannerRef := a.scanner
+	a.mu.Unlock()
+	if len(pool) == 0 {
+		return false
+	}
+	a.logger.Info("开始入池后逐个测速筛选", "targets", len(pool), "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "timeout", cfg.PostPoolSpeedTest.Timeout.Value(), "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
+	kept := make([]scanner.Result, 0, len(pool))
+	removed := make(map[netip.Addr]struct{})
+	blacklistAdditions := []string{}
+	for _, result := range pool {
+		if err := ctx.Err(); err != nil {
+			a.logger.Warn("入池后测速筛选被中断", "error", err)
+			break
+		}
+		speed, err := scannerRef.DownloadSpeed(ctx, result.IP, cfg.PostPoolSpeedTest.Timeout.Value())
+		if err != nil || speed <= 0 || speed < cfg.PostPoolSpeedTest.MinMBps {
+			removed[result.IP] = struct{}{}
+			if cfg.PostPoolSpeedTest.AutoBlacklist {
+				blacklistAdditions = append(blacklistAdditions, result.IP.String())
+			}
+			if err != nil {
+				a.logger.Debug("入池后测速失败，已剔除", "ip", result.IP.String(), "error", err)
+			} else {
+				a.logger.Debug("入池后测速低于门槛，已剔除", "ip", result.IP.String(), "speed_mbps", speed, "min_mbps", cfg.PostPoolSpeedTest.MinMBps)
+			}
+			continue
+		}
+		result.SpeedMBps = speed
+		result.CheckedAt = time.Now().UTC()
+		kept = append(kept, result)
+	}
+	if len(removed) == 0 {
+		a.logger.Info("入池后逐个测速筛选完成，无需剔除", "checked", len(pool), "min_mbps", cfg.PostPoolSpeedTest.MinMBps)
+		return false
+	}
+	sortResults(kept)
+	a.mu.Lock()
+	oldSyncedIPs := append([]string(nil), a.state.DNS.SyncedIPs...)
+	filtered := make([]scanner.Result, 0, len(a.pool))
+	keptByIP := make(map[netip.Addr]scanner.Result, len(kept))
+	for _, result := range kept {
+		keptByIP[result.IP] = result
+	}
+	for _, current := range a.pool {
+		if _, drop := removed[current.IP]; drop {
+			delete(a.failures, current.IP)
+			continue
+		}
+		if updated, ok := keptByIP[current.IP]; ok {
+			current.SpeedMBps = updated.SpeedMBps
+			current.CheckedAt = updated.CheckedAt
+		}
+		filtered = append(filtered, current)
+	}
+	sortResults(filtered)
+	a.pool = filtered
+	a.state.Targets = targetStatesFromResults(filtered, "healthy")
+	a.state.PrimaryIP = valueOr(a.primaryIP(filtered), "")
+	if len(filtered) == 0 {
+		a.state.Status = "degraded"
+	} else {
+		a.state.Status = "running"
+	}
+	blacklistChanged := false
+	if cfg.PostPoolSpeedTest.AutoBlacklist {
+		for _, ip := range blacklistAdditions {
+			if !containsString(a.cfg.IPBlacklist, ip) {
+				a.cfg.IPBlacklist = append(a.cfg.IPBlacklist, ip)
+				blacklistChanged = true
+			}
+		}
+	}
+	blacklist := append([]string(nil), a.cfg.IPBlacklist...)
+	dnsNeedsSync := a.shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, a.desiredDNSIPsLocked(), removed, time.Now())
+	a.mu.Unlock()
+	a.proxy.Update(filtered)
+	a.saveState()
+	if blacklistChanged {
+		if err := config.Set(a.configPath, "ip_blacklist", strings.Join(blacklist, "\n")); err != nil {
+			a.logger.Error("入池后测速自动写入黑名单失败", "error", err)
+		} else if cfg, err := config.Load(a.configPath); err == nil {
+			a.mu.Lock()
+			a.cfg = cfg
+			a.scanner = scanner.New(cfg, a.logger)
+			a.mu.Unlock()
+		}
+	}
+	a.logger.Warn("入池后逐个测速筛选完成，低速 IP 已剔除", "checked", len(pool), "removed", len(removed), "remaining", len(filtered), "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
+	return dnsNeedsSync
+}
+
+func containsString(items []string, value string) bool {
+	for _, item := range items {
+		if strings.TrimSpace(item) == value {
+			return true
+		}
+	}
+	return false
 }
 
 func blacklistedAddr(ip netip.Addr, blacklist []string) bool {
@@ -1240,6 +1354,11 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 		fmt.Fprintf(w, "测速筛选        : ≥ %.2f MB/s，最多测试 %d 个候选，并发 %d\n", cfg.SpeedTest.MinMBps, cfg.SpeedTest.MaxCandidates, cfg.SpeedTest.Concurrency)
 	} else {
 		fmt.Fprintln(w, "测速筛选        : 未启用")
+	}
+	if cfg.PostPoolSpeedTest.Enabled {
+		fmt.Fprintf(w, "入池后测速      : ≥ %.2f MB/s，单 IP %s，自动黑名单 %s\n", cfg.PostPoolSpeedTest.MinMBps, cfg.PostPoolSpeedTest.Timeout.Value(), boolLabel(cfg.PostPoolSpeedTest.AutoBlacklist))
+	} else {
+		fmt.Fprintln(w, "入池后测速      : 未启用")
 	}
 	fmt.Fprintf(w, "重选阈值        : 健康 IP 少于 %d 个时整池重选\n", cfg.MinHealthyCount)
 	if cfg.Update.CheckEnabled {

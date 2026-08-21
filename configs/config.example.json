@@ -41,6 +41,12 @@
     "max_candidates": 50,
     "concurrency": 3
   },
+  "post_pool_speed_test": {
+    "enabled": false,
+    "min_mbps": 1,
+    "timeout": "5s",
+    "auto_blacklist": false
+  },
   "management": {
     "password_enabled": false,
     "password_sha256": ""

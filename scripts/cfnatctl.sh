@@ -185,6 +185,52 @@ toggle_speed_test() {
   done
 }
 
+toggle_post_pool_speed_test() {
+  local value
+  while true; do
+    read -r -p "启用入池后逐个测速筛选？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config post_pool_speed_test_enabled true && return ;;
+      n|N|no|NO|No) set_config post_pool_speed_test_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+edit_post_pool_speed_test_min() {
+  local value
+  while true; do
+    read -r -p "入池后最低速度，单位 MB/s（例如 1）: " value
+    if [[ "${value}" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk "BEGIN {exit !(${value} > 0 && ${value} <= 100000)}"; then
+      if set_config post_pool_speed_test_min_mbps "${value}"; then return; fi
+    fi
+    echo "请输入大于 0 的数字。" >&2
+  done
+}
+
+edit_post_pool_speed_test_timeout() {
+  local value
+  while true; do
+    read -r -p "入池后单 IP 测速时长，单位秒（例如 5）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 300 )); then
+      if set_config post_pool_speed_test_timeout "${value}s"; then return; fi
+    fi
+    echo "请输入 1-300 的整数。" >&2
+  done
+}
+
+toggle_post_pool_speed_test_auto_blacklist() {
+  local value
+  while true; do
+    read -r -p "入池后测速低速 IP 自动加入黑名单？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config post_pool_speed_test_auto_blacklist true && return ;;
+      n|N|no|NO|No) set_config post_pool_speed_test_auto_blacklist false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
 edit_zone_id() {
   local value
   while true; do
@@ -479,17 +525,21 @@ config_menu() {
     echo " 11) 下载测速筛选开关"
     echo " 12) 下载测速最低速度"
     echo " 13) 下载测速并发数"
-    echo " 14) 定时完整重选开关"
-    echo " 15) 管理密码开关"
-    echo " 16) 修改管理密码"
-    echo " 17) 定时检查更新开关"
-    echo " 18) 后台自动更新开关"
-    echo " 19) 检查更新间隔"
-    echo " 20) Web 管理面板开关"
-    echo " 21) Web 管理面板监听地址"
-    echo " 22) Web 用户名和密码"
-    echo " 23) Shodan IP Panel 开关"
-    echo " 24) 使用编辑器修改完整配置"
+    echo " 14) 入池后逐个测速开关"
+    echo " 15) 入池后测速最低速度"
+    echo " 16) 入池后单 IP 测速时长"
+    echo " 17) 入池后低速 IP 自动黑名单"
+    echo " 18) 定时完整重选开关"
+    echo " 19) 管理密码开关"
+    echo " 20) 修改管理密码"
+    echo " 21) 定时检查更新开关"
+    echo " 22) 后台自动更新开关"
+    echo " 23) 检查更新间隔"
+    echo " 24) Web 管理面板开关"
+    echo " 25) Web 管理面板监听地址"
+    echo " 26) Web 用户名和密码"
+    echo " 27) Shodan IP Panel 开关"
+    echo " 28) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -506,17 +556,21 @@ config_menu() {
       11) toggle_speed_test; pause_screen ;;
       12) edit_speed_test_min; pause_screen ;;
       13) edit_speed_test_concurrency; pause_screen ;;
-      14) toggle_scan_interval; pause_screen ;;
-      15) toggle_management_password; pause_screen ;;
-      16) edit_management_password; pause_screen ;;
-      17) toggle_update_check; pause_screen ;;
-      18) toggle_auto_update; pause_screen ;;
-      19) edit_update_check_interval; pause_screen ;;
-      20) toggle_web_panel; pause_screen ;;
-      21) edit_web_listen; pause_screen ;;
-      22) edit_web_auth; pause_screen ;;
-      23) toggle_shodan_panel; pause_screen ;;
-      24)
+      14) toggle_post_pool_speed_test; pause_screen ;;
+      15) edit_post_pool_speed_test_min; pause_screen ;;
+      16) edit_post_pool_speed_test_timeout; pause_screen ;;
+      17) toggle_post_pool_speed_test_auto_blacklist; pause_screen ;;
+      18) toggle_scan_interval; pause_screen ;;
+      19) toggle_management_password; pause_screen ;;
+      20) edit_management_password; pause_screen ;;
+      21) toggle_update_check; pause_screen ;;
+      22) toggle_auto_update; pause_screen ;;
+      23) edit_update_check_interval; pause_screen ;;
+      24) toggle_web_panel; pause_screen ;;
+      25) edit_web_listen; pause_screen ;;
+      26) edit_web_auth; pause_screen ;;
+      27) toggle_shodan_panel; pause_screen ;;
+      28)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"

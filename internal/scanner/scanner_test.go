@@ -173,7 +173,7 @@ func TestDownloadSpeed(t *testing.T) {
 	cfg.SpeedTest.Timeout = config.Duration(2 * time.Second)
 	cfg.SpeedTest.MaxCandidates = 1
 	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	speed, err := s.downloadSpeed(context.Background(), netip.MustParseAddr("127.0.0.1"))
+	speed, err := s.DownloadSpeed(context.Background(), netip.MustParseAddr("127.0.0.1"), cfg.SpeedTest.Timeout.Value())
 	if err != nil {
 		t.Fatal(err)
 	}
