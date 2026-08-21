@@ -54,10 +54,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.20.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.20/cfnat-linux-v0.17.20.tar.gz
+curl -fL -o cfnat-linux-v0.17.21.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.21/cfnat-linux-v0.17.21.tar.gz
 
-tar -xzf cfnat-linux-v0.17.20.tar.gz
+tar -xzf cfnat-linux-v0.17.21.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -154,7 +154,7 @@ Shodan IP Panel 的資料保存在：
 
 若啟用下載測速篩選，TCP 初篩完成後會按 TCP 延遲排序分批做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：每批按 `speed_test.concurrency` 並發下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續探測複篩。若本批通過數不足，會繼續處理下一批 TCP 可連候選；每批通過最終複篩的 IP 會先合併進健康池並熱更新 TCP 轉發，DNS 則仍等本輪掃描完成後再按同步策略更新。
 
-若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度、免測跳過數與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。測速達標的普通 IP 會即時加入 `post_pool_speed_test.exempt_list` 免測名單，後續入池後逐個測速會直接跳過，避免重複消耗時間。若 IP 位於 `post_pool_speed_test.force_test_list`，則每次入池後仍會強制測速；不達標時會從轉發池剔除並遷移回 `ip_blacklist`。三個名單會自動保持互斥，優先級固定為 `ip_blacklist` > `force_test_list` > `exempt_list`。Cloudflare DNS 會在這輪入池後篩選完成後再按最終轉發池同步，避免把剛剔除的低速 IP 同步出去。
+若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度、免測跳過數與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。測速達標的普通 IP 會即時加入 `post_pool_speed_test.exempt_list` 免測名單，後續入池後逐個測速會直接跳過，避免重複消耗時間。若 IP 位於 `post_pool_speed_test.force_test_list`，則每次入池後仍會強制測速；不達標時會從轉發池剔除並遷移回 `ip_blacklist`。三個名單會自動保持互斥：手動把 IP 加入其中一個名單時，會自動從另外兩個名單移除；歷史重複配置則按 `ip_blacklist` > `force_test_list` > `exempt_list` 清理。Cloudflare DNS 會在這輪入池後篩選完成後再按最終轉發池同步，避免把剛剔除的低速 IP 同步出去。
 
 若啟用黑名單 IP 定時測速，程式會按 `blacklist_speed_test.interval` 對 `ip_blacklist` 裡的單個 IP 做並發測速，週期必須以小時為單位，例如 `1h`、`24h`；速度達到 `post_pool_speed_test.min_mbps` 時會自動解除黑名單，並加入 `post_pool_speed_test.force_test_list` 入池不免測速名單。CIDR 黑名單不會展開測速，避免一次性產生過多候選。
 
@@ -313,7 +313,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.20
+make release VERSION=v0.17.21
 ```
 
 ## 命令列

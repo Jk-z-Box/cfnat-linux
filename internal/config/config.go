@@ -145,7 +145,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          19,
+		ConfigVersion:          20,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -415,8 +415,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 19 {
-		raw["config_version"] = 19
+	if version, _ := raw["config_version"].(float64); int(version) < 20 {
+		raw["config_version"] = 20
 		changed = true
 	}
 	if normalizeRawExclusiveLists(raw) {
@@ -635,7 +635,7 @@ func Set(path, key, value string) error {
 	default:
 		return fmt.Errorf("不允许修改的配置项: %s", key)
 	}
-	cfg.normalizeExclusiveLists()
+	cfg.normalizeExclusiveListsForWinner(key)
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -696,6 +696,25 @@ func (c *Config) normalizeExclusiveLists() {
 	higher := append([]string(nil), c.IPBlacklist...)
 	higher = append(higher, c.PostPoolSpeedTest.ForceTestList...)
 	c.PostPoolSpeedTest.ExemptList = filterCoveredEntries(normalizeList(c.PostPoolSpeedTest.ExemptList), higher)
+}
+
+func (c *Config) normalizeExclusiveListsForWinner(key string) {
+	c.IPBlacklist = normalizeList(c.IPBlacklist)
+	c.PostPoolSpeedTest.ForceTestList = normalizeList(c.PostPoolSpeedTest.ForceTestList)
+	c.PostPoolSpeedTest.ExemptList = normalizeList(c.PostPoolSpeedTest.ExemptList)
+	switch key {
+	case "ip_blacklist":
+		c.PostPoolSpeedTest.ForceTestList = filterCoveredEntries(c.PostPoolSpeedTest.ForceTestList, c.IPBlacklist)
+		c.PostPoolSpeedTest.ExemptList = filterCoveredEntries(c.PostPoolSpeedTest.ExemptList, c.IPBlacklist)
+	case "post_pool_speed_test_force_test_list":
+		c.IPBlacklist = filterCoveredEntries(c.IPBlacklist, c.PostPoolSpeedTest.ForceTestList)
+		c.PostPoolSpeedTest.ExemptList = filterCoveredEntries(c.PostPoolSpeedTest.ExemptList, c.PostPoolSpeedTest.ForceTestList)
+	case "post_pool_speed_test_exempt_list":
+		c.IPBlacklist = filterCoveredEntries(c.IPBlacklist, c.PostPoolSpeedTest.ExemptList)
+		c.PostPoolSpeedTest.ForceTestList = filterCoveredEntries(c.PostPoolSpeedTest.ForceTestList, c.PostPoolSpeedTest.ExemptList)
+	default:
+		c.normalizeExclusiveLists()
+	}
 }
 
 func normalizeList(items []string) []string {

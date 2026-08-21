@@ -346,7 +346,7 @@ func TestMigrateBlacklistSpeedIntervalToHours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConfigVersion != 19 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
+	if got.ConfigVersion != 20 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
 		t.Fatalf("version=%d blacklist interval=%s", got.ConfigVersion, got.BlacklistSpeedTest.Interval.Value())
 	}
 }
@@ -380,7 +380,7 @@ func TestSetExclusiveIPListsPriority(t *testing.T) {
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Set(path, "post_pool_speed_test_exempt_list", "192.0.2.1\n203.0.113.1"); err != nil {
+	if err := Set(path, "ip_blacklist", "192.0.2.1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Set(path, "post_pool_speed_test_force_test_list", "192.0.2.1"); err != nil {
@@ -393,10 +393,13 @@ func TestSetExclusiveIPListsPriority(t *testing.T) {
 	if strings.Join(got.PostPoolSpeedTest.ForceTestList, ",") != "192.0.2.1" {
 		t.Fatalf("force list after force set = %+v", got.PostPoolSpeedTest.ForceTestList)
 	}
-	if strings.Join(got.PostPoolSpeedTest.ExemptList, ",") != "203.0.113.1" {
+	if len(got.IPBlacklist) != 0 {
+		t.Fatalf("blacklist after force set = %+v", got.IPBlacklist)
+	}
+	if len(got.PostPoolSpeedTest.ExemptList) != 0 {
 		t.Fatalf("exempt list after force set = %+v", got.PostPoolSpeedTest.ExemptList)
 	}
-	if err := Set(path, "ip_blacklist", "192.0.2.1"); err != nil {
+	if err := Set(path, "post_pool_speed_test_exempt_list", "192.0.2.1\n203.0.113.1"); err != nil {
 		t.Fatal(err)
 	}
 	got, err = Load(path)
@@ -404,9 +407,22 @@ func TestSetExclusiveIPListsPriority(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got.PostPoolSpeedTest.ForceTestList) != 0 {
-		t.Fatalf("force list after blacklist set = %+v", got.PostPoolSpeedTest.ForceTestList)
+		t.Fatalf("force list after exempt set = %+v", got.PostPoolSpeedTest.ForceTestList)
 	}
-	if strings.Join(got.PostPoolSpeedTest.ExemptList, ",") != "203.0.113.1" {
+	if strings.Join(got.PostPoolSpeedTest.ExemptList, ",") != "192.0.2.1,203.0.113.1" {
+		t.Fatalf("exempt list after exempt set = %+v", got.PostPoolSpeedTest.ExemptList)
+	}
+	if err := Set(path, "ip_blacklist", "203.0.113.1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.IPBlacklist, ",") != "203.0.113.1" {
+		t.Fatalf("blacklist after blacklist set = %+v", got.IPBlacklist)
+	}
+	if strings.Join(got.PostPoolSpeedTest.ExemptList, ",") != "192.0.2.1" {
 		t.Fatalf("exempt list after blacklist set = %+v", got.PostPoolSpeedTest.ExemptList)
 	}
 }

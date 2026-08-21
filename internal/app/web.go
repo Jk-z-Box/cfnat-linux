@@ -360,6 +360,25 @@ func (w *webServer) handleCFNatConfig(rw http.ResponseWriter, r *http.Request) {
 			postPoolForceTestList = append(postPoolForceTestList, item)
 		}
 	}
+	previousCfg := w.app.cfg
+	if cfg, err := config.Load(w.app.configPath); err == nil {
+		previousCfg = cfg
+	}
+	addedExempt := addedListEntries(postPoolExemptList, previousCfg.PostPoolSpeedTest.ExemptList)
+	if len(addedExempt) > 0 {
+		ipBlacklist = removeListEntries(ipBlacklist, addedExempt)
+		postPoolForceTestList = removeListEntries(postPoolForceTestList, addedExempt)
+	}
+	addedForce := addedListEntries(postPoolForceTestList, previousCfg.PostPoolSpeedTest.ForceTestList)
+	if len(addedForce) > 0 {
+		ipBlacklist = removeListEntries(ipBlacklist, addedForce)
+		postPoolExemptList = removeListEntries(postPoolExemptList, addedForce)
+	}
+	addedBlacklist := addedListEntries(ipBlacklist, previousCfg.IPBlacklist)
+	if len(addedBlacklist) > 0 {
+		postPoolForceTestList = removeListEntries(postPoolForceTestList, addedBlacklist)
+		postPoolExemptList = removeListEntries(postPoolExemptList, addedBlacklist)
+	}
 	updates := map[string]string{
 		"ip_sources":                           strings.Join(ipSources, "\n"),
 		"ip_blacklist":                         strings.Join(ipBlacklist, "\n"),
@@ -833,6 +852,54 @@ func boolText(v bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func addedListEntries(current, previous []string) []string {
+	prev := listEntrySet(previous)
+	added := []string{}
+	seen := map[string]struct{}{}
+	for _, item := range current {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if key == "" {
+			continue
+		}
+		if _, ok := prev[key]; ok {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		added = append(added, item)
+	}
+	return added
+}
+
+func removeListEntries(items, remove []string) []string {
+	removeSet := listEntrySet(remove)
+	if len(removeSet) == 0 {
+		return items
+	}
+	filtered := make([]string, 0, len(items))
+	for _, item := range items {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if _, ok := removeSet[key]; ok {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func listEntrySet(items []string) map[string]struct{} {
+	set := map[string]struct{}{}
+	for _, item := range items {
+		key := strings.ToLower(strings.TrimSpace(item))
+		if key != "" {
+			set[key] = struct{}{}
+		}
+	}
+	return set
 }
 
 const css = `
