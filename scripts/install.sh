@@ -367,6 +367,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "insecure_skip_verify": false,
   "check_url": "https://cloudflare.com/cdn-cgi/trace",
   "expected_status": 200,
+  "probe_mode": "http",
   "max_latency": "${MAX_LATENCY}",
   "dial_timeout": "3s",
   "colos": [${COLO_JSON}],

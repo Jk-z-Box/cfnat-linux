@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -501,6 +502,73 @@ func (a *App) filterRecoveryResults(results []scanner.Result) []scanner.Result {
 		filtered = append(filtered, result)
 	}
 	return filtered
+}
+
+func (a *App) applyBlacklistNow() (int, bool) {
+	a.mu.Lock()
+	oldSyncedIPs := append([]string(nil), a.state.DNS.SyncedIPs...)
+	removed := make(map[netip.Addr]struct{})
+	filterPool := a.pool[:0]
+	for _, result := range a.pool {
+		if blacklistedAddr(result.IP, a.cfg.IPBlacklist) {
+			removed[result.IP] = struct{}{}
+			delete(a.failures, result.IP)
+			continue
+		}
+		filterPool = append(filterPool, result)
+	}
+	a.pool = filterPool
+	filterRecovery := a.recovery[:0]
+	for _, result := range a.recovery {
+		if blacklistedAddr(result.IP, a.cfg.IPBlacklist) {
+			removed[result.IP] = struct{}{}
+			delete(a.recoveryAt, result.IP)
+			delete(a.recoveryOK, result.IP)
+			continue
+		}
+		filterRecovery = append(filterRecovery, result)
+	}
+	a.recovery = filterRecovery
+	if len(removed) == 0 {
+		a.mu.Unlock()
+		return 0, false
+	}
+	a.state.Targets = mergeTargetStates(a.pool, a.state.Targets)
+	a.state.Recovery = targetStatesFromResults(a.recovery, "recovering")
+	a.state.PrimaryIP = valueOr(a.primaryIP(a.pool), "")
+	if len(a.pool) == 0 {
+		a.state.Status = "degraded"
+	} else {
+		a.state.Status = "running"
+	}
+	dnsNeedsSync := a.shouldSyncDNSAfterPoolChangeLocked(oldSyncedIPs, a.desiredDNSIPsLocked(), removed, time.Now())
+	pool := append([]scanner.Result(nil), a.pool...)
+	a.mu.Unlock()
+	a.proxy.Update(pool)
+	a.saveState()
+	a.logger.Info("黑名单已实时应用到转发池", "removed", len(removed), "remaining", len(pool))
+	return len(removed), dnsNeedsSync
+}
+
+func blacklistedAddr(ip netip.Addr, blacklist []string) bool {
+	for _, item := range blacklist {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "/") {
+			prefix, err := netip.ParsePrefix(item)
+			if err == nil && prefix.Masked().Contains(ip) {
+				return true
+			}
+			continue
+		}
+		blocked, err := netip.ParseAddr(item)
+		if err == nil && blocked == ip {
+			return true
+		}
+	}
+	return false
 }
 
 func selectPoolAfterScan(reason string, currentHealthy, scanned []scanner.Result, size int) ([]scanner.Result, string) {

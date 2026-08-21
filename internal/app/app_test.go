@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"html/template"
+	"io"
+	"log/slog"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -192,6 +194,27 @@ func TestFilterRecoveryResultsExcludesCoolingIPs(t *testing.T) {
 		result("192.0.2.3", 100),
 	})
 	assertIPs(t, filtered, "192.0.2.1", "192.0.2.3")
+}
+
+func TestApplyBlacklistNowPrunesPoolAndRecovery(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.IPBlacklist = []string{"192.0.2.2", "198.51.100.0/24"}
+	app := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, "v0.17.12", "")
+	app.pool = []scanner.Result{result("192.0.2.1", 80), result("192.0.2.2", 90)}
+	app.recovery = []scanner.Result{result("198.51.100.9", 100)}
+	app.recoveryAt[netip.MustParseAddr("198.51.100.9")] = time.Now()
+	app.recoveryOK[netip.MustParseAddr("198.51.100.9")] = 1
+	removed, dns := app.applyBlacklistNow()
+	if removed != 2 {
+		t.Fatalf("removed = %d", removed)
+	}
+	if dns {
+		t.Fatal("unexpected dns sync")
+	}
+	assertIPs(t, app.pool, "192.0.2.1")
+	if len(app.recovery) != 0 {
+		t.Fatalf("recovery = %#v", app.recovery)
+	}
 }
 
 func TestShodanSummaryUsesActiveProfileState(t *testing.T) {

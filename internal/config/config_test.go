@@ -95,6 +95,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.RecoverySuccesses != 2 {
 		t.Fatalf("recovery successes = %d", cfg.RecoverySuccesses)
 	}
+	if cfg.ProbeMode != "http" {
+		t.Fatalf("probe mode = %q", cfg.ProbeMode)
+	}
 }
 
 func TestDNSRecordTypeAuto(t *testing.T) {
@@ -167,6 +170,28 @@ func TestRejectInvalidRecoverySettings(t *testing.T) {
 	cfg.RecoverySuccesses = 0
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected recovery successes validation error")
+	}
+}
+
+func TestProbeModeAliasesAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Defaults()
+	data, _ := json.Marshal(cfg)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "probe_mode", "tcping"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProbeMode != "tcp" {
+		t.Fatalf("probe mode = %q", got.ProbeMode)
+	}
+	if err := Set(path, "probe_mode", "bad"); err == nil {
+		t.Fatal("expected invalid probe mode error")
 	}
 }
 

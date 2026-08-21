@@ -16,7 +16,9 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -488,6 +490,17 @@ func (s *Scanner) rankTCP(ctx context.Context, candidates []netip.Addr) ([]ranke
 }
 
 func (s *Scanner) Probe(ctx context.Context, ip netip.Addr) (Result, error) {
+	switch s.cfg.ProbeMode {
+	case "tcp":
+		return s.probeTCP(ctx, ip)
+	case "icmp":
+		return s.probeICMP(ctx, ip)
+	default:
+		return s.probeHTTP(ctx, ip)
+	}
+}
+
+func (s *Scanner) probeHTTP(ctx context.Context, ip netip.Addr) (Result, error) {
 	u, _ := url.Parse(s.cfg.CheckURL)
 	start := time.Now()
 	needBody := len(s.cfg.Colos) > 0 && u.Path == "/cdn-cgi/trace"
@@ -516,6 +529,67 @@ func (s *Scanner) Probe(ctx context.Context, ip netip.Addr) (Result, error) {
 		}
 	}
 	return Result{IP: ip, LatencyMS: latency.Milliseconds(), Colo: colo, CheckedAt: time.Now().UTC()}, nil
+}
+
+func (s *Scanner) probeTCP(ctx context.Context, ip netip.Addr) (Result, error) {
+	dialer := net.Dialer{Timeout: s.cfg.DialTimeout.Value()}
+	start := time.Now()
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), fmt.Sprint(s.cfg.TargetPort)))
+	latency := time.Since(start)
+	if err != nil {
+		kind := "tcp_connect"
+		if errors.Is(err, context.Canceled) {
+			kind = "canceled"
+		} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			kind = "tcp_timeout"
+		}
+		return Result{}, probeError(kind, err)
+	}
+	_ = conn.Close()
+	if latency > s.cfg.MaxLatency.Value() {
+		return Result{}, probeError("latency", fmt.Errorf("延迟 %s 超过限制 %s", latency, s.cfg.MaxLatency.Value()))
+	}
+	return Result{IP: ip, LatencyMS: latency.Milliseconds(), CheckedAt: time.Now().UTC()}, nil
+}
+
+func (s *Scanner) probeICMP(ctx context.Context, ip netip.Addr) (Result, error) {
+	timeout := max(1, int(s.cfg.DialTimeout.Value().Round(time.Second)/time.Second))
+	args := []string{"-c", "1", "-W", fmt.Sprint(timeout), ip.String()}
+	if ip.Is6() {
+		args = append([]string{"-6"}, args...)
+	}
+	start := time.Now()
+	out, err := exec.CommandContext(ctx, "ping", args...).CombinedOutput()
+	latency := time.Since(start)
+	if err != nil {
+		kind := "icmp"
+		if errors.Is(ctx.Err(), context.Canceled) {
+			kind = "canceled"
+		}
+		return Result{}, probeError(kind, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out))))
+	}
+	if parsed, ok := parsePingLatency(string(out)); ok {
+		latency = parsed
+	}
+	if latency > s.cfg.MaxLatency.Value() {
+		return Result{}, probeError("latency", fmt.Errorf("延迟 %s 超过限制 %s", latency, s.cfg.MaxLatency.Value()))
+	}
+	return Result{IP: ip, LatencyMS: latency.Milliseconds(), CheckedAt: time.Now().UTC()}, nil
+}
+
+func parsePingLatency(output string) (time.Duration, bool) {
+	for _, field := range strings.Fields(output) {
+		if strings.HasPrefix(field, "time=") || strings.HasPrefix(field, "time<") {
+			value := strings.TrimPrefix(strings.TrimPrefix(field, "time="), "time<")
+			value = strings.TrimSuffix(value, "ms")
+			ms, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return 0, false
+			}
+			return time.Duration(ms * float64(time.Millisecond)), true
+		}
+	}
+	return 0, false
 }
 
 func (s *Scanner) request(ctx context.Context, ip netip.Addr, path string, readBody bool) (int, string, error) {

@@ -111,6 +111,48 @@ func TestProbeRejectsIPAboveLatencyLimit(t *testing.T) {
 	}
 }
 
+func TestProbeTCPMode(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	_, portText, _ := net.SplitHostPort(listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	cfg := config.Defaults()
+	cfg.ProbeMode = "tcp"
+	cfg.TargetPort = port
+	cfg.MaxLatency = config.Duration(time.Second)
+	cfg.DialTimeout = config.Duration(time.Second)
+	s := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	got, err := s.Probe(context.Background(), netip.MustParseAddr("127.0.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IP.String() != "127.0.0.1" {
+		t.Fatalf("ip = %s", got.IP)
+	}
+}
+
+func TestParsePingLatency(t *testing.T) {
+	got, ok := parsePingLatency("64 bytes from 127.0.0.1: icmp_seq=1 ttl=64 time=12.345 ms")
+	if !ok {
+		t.Fatal("expected ping latency")
+	}
+	if got != 12345*time.Microsecond {
+		t.Fatalf("latency = %s", got)
+	}
+}
+
 func TestDownloadSpeed(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -100,6 +100,7 @@ type Config struct {
 	InsecureSkipVerify     bool             `json:"insecure_skip_verify"`
 	CheckURL               string           `json:"check_url"`
 	ExpectedStatus         int              `json:"expected_status"`
+	ProbeMode              string           `json:"probe_mode"`
 	MaxLatency             Duration         `json:"max_latency"`
 	DialTimeout            Duration         `json:"dial_timeout"`
 	Colos                  []string         `json:"colos"`
@@ -138,6 +139,7 @@ func Defaults() Config {
 		TLS:                    true,
 		CheckURL:               "https://cloudflare.com/cdn-cgi/trace",
 		ExpectedStatus:         200,
+		ProbeMode:              "http",
 		MaxLatency:             Duration(800 * time.Millisecond),
 		DialTimeout:            Duration(3 * time.Second),
 		ScanIntervalEnabled:    true,
@@ -179,6 +181,7 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return cfg, err
 	}
+	cfg.ProbeMode = normalizeProbeMode(cfg.ProbeMode)
 	return cfg, cfg.Validate()
 }
 
@@ -214,6 +217,10 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["latency_monitor_interval"]; !ok {
 		raw["latency_monitor_interval"] = "2s"
+		changed = true
+	}
+	if _, ok := raw["probe_mode"]; !ok {
+		raw["probe_mode"] = "http"
 		changed = true
 	}
 	if _, ok := raw["recovery_cooldown"]; !ok {
@@ -347,6 +354,8 @@ func Set(path, key, value string) error {
 			return errors.New("延迟格式无效，请使用 300ms、1s 等格式")
 		}
 		cfg.MaxLatency = Duration(parsed)
+	case "probe_mode":
+		cfg.ProbeMode = strings.TrimSpace(value)
 	case "min_healthy_count":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
@@ -455,6 +464,7 @@ func Set(path, key, value string) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+	cfg.ProbeMode = normalizeProbeMode(cfg.ProbeMode)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -476,6 +486,19 @@ func splitNonEmptyLines(value string) []string {
 		}
 	}
 	return items
+}
+
+func normalizeProbeMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "http", "https":
+		return "http"
+	case "tcp", "tcping":
+		return "tcp"
+	case "icmp", "ping":
+		return "icmp"
+	default:
+		return ""
+	}
 }
 
 func (c *Config) Validate() error {
@@ -512,6 +535,11 @@ func (c *Config) Validate() error {
 	}
 	if c.TargetPort < 1 || c.TargetPort > 65535 {
 		return errors.New("target_port 超出范围")
+	}
+	probeModeRaw := strings.TrimSpace(c.ProbeMode)
+	probeMode := normalizeProbeMode(probeModeRaw)
+	if probeMode == "" || probeModeRaw == "" && c.ProbeMode != "" {
+		return errors.New("probe_mode 只能是 http、tcp/tcping 或 icmp/ping")
 	}
 	if c.RecoverySuccesses < 1 {
 		return errors.New("recovery_successes 必须大于 0")
