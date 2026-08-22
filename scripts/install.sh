@@ -350,7 +350,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 20,
+  "config_version": 21,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -398,7 +398,12 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "timeout": "5s",
     "auto_blacklist": false,
     "exempt_list": [],
-    "force_test_list": []
+    "force_test_list": [],
+    "exempt_direct_pool_enabled": true,
+    "exempt_recovery_evict_enabled": true,
+    "exempt_recovery_window": "24h",
+    "exempt_recovery_max_ratio": 0.6,
+    "exempt_recovery_min_samples": 20
   },
   "blacklist_speed_test": {
     "enabled": false,

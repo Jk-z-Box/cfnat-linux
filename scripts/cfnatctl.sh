@@ -231,6 +231,63 @@ toggle_post_pool_speed_test_auto_blacklist() {
   done
 }
 
+toggle_post_pool_exempt_direct_pool() {
+  local value
+  while true; do
+    read -r -p "免测速名单中的精确 IP 是否直接固定入池？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config post_pool_speed_test_exempt_direct_pool_enabled true && return ;;
+      n|N|no|NO|No) set_config post_pool_speed_test_exempt_direct_pool_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+toggle_post_pool_exempt_recovery_evict() {
+  local value
+  while true; do
+    read -r -p "长期停留冷却池的免测速固定 IP 是否自动移出免测速名单？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config post_pool_speed_test_exempt_recovery_evict_enabled true && return ;;
+      n|N|no|NO|No) set_config post_pool_speed_test_exempt_recovery_evict_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+edit_post_pool_exempt_recovery_window() {
+  local value
+  while true; do
+    read -r -p "免测速固定 IP 冷却统计窗口，单位小时（例如 24）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 8760 )); then
+      if set_config post_pool_speed_test_exempt_recovery_window "${value}h"; then return; fi
+    fi
+    echo "请输入 1-8760 的整数。" >&2
+  done
+}
+
+edit_post_pool_exempt_recovery_ratio() {
+  local value
+  while true; do
+    read -r -p "免测速固定 IP 冷却占比门槛，0-1（例如 0.6）: " value
+    if [[ "${value}" =~ ^0([.][0-9]+)?$|^1([.]0+)?$ ]] && awk "BEGIN {exit !(${value} > 0 && ${value} <= 1)}"; then
+      if set_config post_pool_speed_test_exempt_recovery_max_ratio "${value}"; then return; fi
+    fi
+    echo "请输入大于 0 且小于等于 1 的数字，例如 0.6。" >&2
+  done
+}
+
+edit_post_pool_exempt_recovery_samples() {
+  local value
+  while true; do
+    read -r -p "免测速固定 IP 冷却淘汰最小观察样本（例如 20）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 100000 )); then
+      if set_config post_pool_speed_test_exempt_recovery_min_samples "${value}"; then return; fi
+    fi
+    echo "请输入大于 0 的整数。" >&2
+  done
+}
+
 edit_zone_id() {
   local value
   while true; do
@@ -529,17 +586,22 @@ config_menu() {
     echo " 15) 入池后测速最低速度"
     echo " 16) 入池后单 IP 测速时长"
     echo " 17) 入池后低速 IP 自动黑名单"
-    echo " 18) 定时完整重选开关"
-    echo " 19) 管理密码开关"
-    echo " 20) 修改管理密码"
-    echo " 21) 定时检查更新开关"
-    echo " 22) 后台自动更新开关"
-    echo " 23) 检查更新间隔"
-    echo " 24) Web 管理面板开关"
-    echo " 25) Web 管理面板监听地址"
-    echo " 26) Web 用户名和密码"
-    echo " 27) Shodan IP Panel 开关"
-    echo " 28) 使用编辑器修改完整配置"
+    echo " 18) 免测速名单精确 IP 固定入池开关"
+    echo " 19) 免测速固定 IP 长期冷却自动移除开关"
+    echo " 20) 免测速固定 IP 冷却统计窗口"
+    echo " 21) 免测速固定 IP 冷却占比门槛"
+    echo " 22) 免测速固定 IP 冷却淘汰最小样本"
+    echo " 23) 定时完整重选开关"
+    echo " 24) 管理密码开关"
+    echo " 25) 修改管理密码"
+    echo " 26) 定时检查更新开关"
+    echo " 27) 后台自动更新开关"
+    echo " 28) 检查更新间隔"
+    echo " 29) Web 管理面板开关"
+    echo " 30) Web 管理面板监听地址"
+    echo " 31) Web 用户名和密码"
+    echo " 32) Shodan IP Panel 开关"
+    echo " 33) 使用编辑器修改完整配置"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -560,17 +622,22 @@ config_menu() {
       15) edit_post_pool_speed_test_min; pause_screen ;;
       16) edit_post_pool_speed_test_timeout; pause_screen ;;
       17) toggle_post_pool_speed_test_auto_blacklist; pause_screen ;;
-      18) toggle_scan_interval; pause_screen ;;
-      19) toggle_management_password; pause_screen ;;
-      20) edit_management_password; pause_screen ;;
-      21) toggle_update_check; pause_screen ;;
-      22) toggle_auto_update; pause_screen ;;
-      23) edit_update_check_interval; pause_screen ;;
-      24) toggle_web_panel; pause_screen ;;
-      25) edit_web_listen; pause_screen ;;
-      26) edit_web_auth; pause_screen ;;
-      27) toggle_shodan_panel; pause_screen ;;
-      28)
+      18) toggle_post_pool_exempt_direct_pool; pause_screen ;;
+      19) toggle_post_pool_exempt_recovery_evict; pause_screen ;;
+      20) edit_post_pool_exempt_recovery_window; pause_screen ;;
+      21) edit_post_pool_exempt_recovery_ratio; pause_screen ;;
+      22) edit_post_pool_exempt_recovery_samples; pause_screen ;;
+      23) toggle_scan_interval; pause_screen ;;
+      24) toggle_management_password; pause_screen ;;
+      25) edit_management_password; pause_screen ;;
+      26) toggle_update_check; pause_screen ;;
+      27) toggle_auto_update; pause_screen ;;
+      28) edit_update_check_interval; pause_screen ;;
+      29) toggle_web_panel; pause_screen ;;
+      30) edit_web_listen; pause_screen ;;
+      31) edit_web_auth; pause_screen ;;
+      32) toggle_shodan_panel; pause_screen ;;
+      33)
         backup="$(mktemp)"
         cp -p "${CONFIG_FILE}" "${backup}"
         "${EDITOR:-vi}" "${CONFIG_FILE}"

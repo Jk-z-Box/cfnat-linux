@@ -287,7 +287,7 @@ func TestPostPoolSpeedTestSetAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist || len(got.PostPoolSpeedTest.ExemptList) != 2 || len(got.PostPoolSpeedTest.ForceTestList) != 1 {
+	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist || len(got.PostPoolSpeedTest.ExemptList) != 2 || len(got.PostPoolSpeedTest.ForceTestList) != 1 || !got.PostPoolSpeedTest.ExemptDirectPoolEnabled || !got.PostPoolSpeedTest.ExemptRecoveryEvictEnabled {
 		t.Fatalf("post pool speed config = %+v", got.PostPoolSpeedTest)
 	}
 	if err := Set(path, "post_pool_speed_test_min_mbps", "0"); err == nil {
@@ -346,7 +346,7 @@ func TestMigrateBlacklistSpeedIntervalToHours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConfigVersion != 20 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
+	if got.ConfigVersion != 21 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
 		t.Fatalf("version=%d blacklist interval=%s", got.ConfigVersion, got.BlacklistSpeedTest.Interval.Value())
 	}
 }

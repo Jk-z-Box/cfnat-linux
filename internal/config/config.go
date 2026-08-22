@@ -59,12 +59,17 @@ type SpeedTestConfig struct {
 }
 
 type PostPoolSpeedTestConfig struct {
-	Enabled       bool     `json:"enabled"`
-	MinMBps       float64  `json:"min_mbps"`
-	Timeout       Duration `json:"timeout"`
-	AutoBlacklist bool     `json:"auto_blacklist"`
-	ExemptList    []string `json:"exempt_list"`
-	ForceTestList []string `json:"force_test_list"`
+	Enabled                    bool     `json:"enabled"`
+	MinMBps                    float64  `json:"min_mbps"`
+	Timeout                    Duration `json:"timeout"`
+	AutoBlacklist              bool     `json:"auto_blacklist"`
+	ExemptList                 []string `json:"exempt_list"`
+	ForceTestList              []string `json:"force_test_list"`
+	ExemptDirectPoolEnabled    bool     `json:"exempt_direct_pool_enabled"`
+	ExemptRecoveryEvictEnabled bool     `json:"exempt_recovery_evict_enabled"`
+	ExemptRecoveryWindow       Duration `json:"exempt_recovery_window"`
+	ExemptRecoveryMaxRatio     float64  `json:"exempt_recovery_max_ratio"`
+	ExemptRecoveryMinSamples   int      `json:"exempt_recovery_min_samples"`
 }
 
 type BlacklistSpeedTestConfig struct {
@@ -145,7 +150,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          20,
+		ConfigVersion:          21,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -186,6 +191,8 @@ func Defaults() Config {
 		},
 		PostPoolSpeedTest: PostPoolSpeedTestConfig{
 			Enabled: false, MinMBps: 1, Timeout: Duration(5 * time.Second), AutoBlacklist: false, ExemptList: []string{}, ForceTestList: []string{},
+			ExemptDirectPoolEnabled: true, ExemptRecoveryEvictEnabled: true, ExemptRecoveryWindow: Duration(24 * time.Hour),
+			ExemptRecoveryMaxRatio: 0.6, ExemptRecoveryMinSamples: 20,
 		},
 		BlacklistSpeedTest: BlacklistSpeedTestConfig{
 			Enabled: false, Interval: Duration(24 * time.Hour), Timeout: Duration(5 * time.Second), Concurrency: 3,
@@ -310,6 +317,8 @@ func Migrate(path string) (bool, error) {
 	if _, ok := raw["post_pool_speed_test"]; !ok {
 		raw["post_pool_speed_test"] = map[string]any{
 			"enabled": false, "min_mbps": 1, "timeout": "5s", "auto_blacklist": false, "exempt_list": []any{}, "force_test_list": []any{},
+			"exempt_direct_pool_enabled": true, "exempt_recovery_evict_enabled": true, "exempt_recovery_window": "24h",
+			"exempt_recovery_max_ratio": 0.6, "exempt_recovery_min_samples": 20,
 		}
 		changed = true
 	} else if post, ok := raw["post_pool_speed_test"].(map[string]any); ok {
@@ -335,6 +344,26 @@ func Migrate(path string) (bool, error) {
 		}
 		if _, ok := post["force_test_list"]; !ok {
 			post["force_test_list"] = []any{}
+			changed = true
+		}
+		if _, ok := post["exempt_direct_pool_enabled"]; !ok {
+			post["exempt_direct_pool_enabled"] = true
+			changed = true
+		}
+		if _, ok := post["exempt_recovery_evict_enabled"]; !ok {
+			post["exempt_recovery_evict_enabled"] = true
+			changed = true
+		}
+		if _, ok := post["exempt_recovery_window"]; !ok {
+			post["exempt_recovery_window"] = "24h"
+			changed = true
+		}
+		if _, ok := post["exempt_recovery_max_ratio"]; !ok {
+			post["exempt_recovery_max_ratio"] = 0.6
+			changed = true
+		}
+		if _, ok := post["exempt_recovery_min_samples"]; !ok {
+			post["exempt_recovery_min_samples"] = 20
 			changed = true
 		}
 	}
@@ -415,8 +444,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 20 {
-		raw["config_version"] = 20
+	if version, _ := raw["config_version"].(float64); int(version) < 21 {
+		raw["config_version"] = 21
 		changed = true
 	}
 	if normalizeRawExclusiveLists(raw) {
@@ -608,6 +637,36 @@ func Set(path, key, value string) error {
 		cfg.PostPoolSpeedTest.ExemptList = splitNonEmptyLines(value)
 	case "post_pool_speed_test_force_test_list":
 		cfg.PostPoolSpeedTest.ForceTestList = splitNonEmptyLines(value)
+	case "post_pool_speed_test_exempt_direct_pool_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_direct_pool_enabled 只能是 true 或 false")
+		}
+		cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = parsed
+	case "post_pool_speed_test_exempt_recovery_evict_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_recovery_evict_enabled 只能是 true 或 false")
+		}
+		cfg.PostPoolSpeedTest.ExemptRecoveryEvictEnabled = parsed
+	case "post_pool_speed_test_exempt_recovery_window":
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_recovery_window 格式无效，请使用 24h、7d 不支持，请用 168h")
+		}
+		cfg.PostPoolSpeedTest.ExemptRecoveryWindow = Duration(parsed)
+	case "post_pool_speed_test_exempt_recovery_max_ratio":
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_recovery_max_ratio 必须是数字")
+		}
+		cfg.PostPoolSpeedTest.ExemptRecoveryMaxRatio = parsed
+	case "post_pool_speed_test_exempt_recovery_min_samples":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_recovery_min_samples 必须是整数")
+		}
+		cfg.PostPoolSpeedTest.ExemptRecoveryMinSamples = parsed
 	case "blacklist_speed_test_enabled":
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
@@ -944,6 +1003,15 @@ func (c *Config) Validate() error {
 		if c.PostPoolSpeedTest.Timeout.Value() <= 0 {
 			return errors.New("post_pool_speed_test.timeout 必须大于 0")
 		}
+	}
+	if c.PostPoolSpeedTest.ExemptRecoveryWindow.Value() <= 0 {
+		return errors.New("post_pool_speed_test.exempt_recovery_window 必须大于 0")
+	}
+	if c.PostPoolSpeedTest.ExemptRecoveryMaxRatio <= 0 || c.PostPoolSpeedTest.ExemptRecoveryMaxRatio > 1 {
+		return errors.New("post_pool_speed_test.exempt_recovery_max_ratio 必须大于 0 且小于等于 1")
+	}
+	if c.PostPoolSpeedTest.ExemptRecoveryMinSamples < 1 {
+		return errors.New("post_pool_speed_test.exempt_recovery_min_samples 必须大于 0")
 	}
 	if c.BlacklistSpeedTest.Enabled {
 		if c.BlacklistSpeedTest.Interval.Value() <= 0 {

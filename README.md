@@ -54,10 +54,10 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
 ```bash
-curl -fL -o cfnat-linux-v0.17.21.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.17.21/cfnat-linux-v0.17.21.tar.gz
+curl -fL -o cfnat-linux-v0.18.0.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.18.0/cfnat-linux-v0.18.0.tar.gz
 
-tar -xzf cfnat-linux-v0.17.21.tar.gz
+tar -xzf cfnat-linux-v0.18.0.tar.gz
 cd cfnat-linux
 sudo ./scripts/install.sh
 ```
@@ -154,7 +154,13 @@ Shodan IP Panel 的資料保存在：
 
 若啟用下載測速篩選，TCP 初篩完成後會按 TCP 延遲排序分批做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：每批按 `speed_test.concurrency` 並發下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續探測複篩。若本批通過數不足，會繼續處理下一批 TCP 可連候選；每批通過最終複篩的 IP 會先合併進健康池並熱更新 TCP 轉發，DNS 則仍等本輪掃描完成後再按同步策略更新。
 
-若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度、免測跳過數與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。測速達標的普通 IP 會即時加入 `post_pool_speed_test.exempt_list` 免測名單，後續入池後逐個測速會直接跳過，避免重複消耗時間。若 IP 位於 `post_pool_speed_test.force_test_list`，則每次入池後仍會強制測速；不達標時會從轉發池剔除並遷移回 `ip_blacklist`。三個名單會自動保持互斥：手動把 IP 加入其中一個名單時，會自動從另外兩個名單移除；歷史重複配置則按 `ip_blacklist` > `force_test_list` > `exempt_list` 清理。Cloudflare DNS 會在這輪入池後篩選完成後再按最終轉發池同步，避免把剛剔除的低速 IP 同步出去。
+若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度、免測跳過數與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。
+
+`post_pool_speed_test.exempt_list` 是「IP 入池免測速名單」。測速達標的普通 IP 會即時加入此名單；後續入池後逐個測速會跳過它。當 `post_pool_speed_test.exempt_direct_pool_enabled=true` 時，名單中的精確 IP 還會成為固定免測速池：跳過掃描階段直接入池，掃描中不會被動態掃描結果頂出，也不計入 `valid_ip_count` 與 `pool_size`。例如 `pool_size=50`、免測精確 IP 有 60 個、新掃描合格 IP 有 60 個時，最終轉發池會是 60 個固定免測 IP 加上動態掃描前 50 個，共 110 個。CIDR 項目不會直接展開入池，只作為免測匹配規則，避免一個網段產生過大的固定池。
+
+固定免測速 IP 仍遵守健康檢查策略：不健康時會從轉發池剔除並進入冷卻恢復池；恢復健康後回到固定池。若 `post_pool_speed_test.exempt_recovery_evict_enabled=true`，程式會按 `post_pool_speed_test.exempt_recovery_window` 統計冷卻占比；當觀察樣本數達到 `post_pool_speed_test.exempt_recovery_min_samples`，且冷卻占比大於等於 `post_pool_speed_test.exempt_recovery_max_ratio` 時，該 IP 會從免測名單移除，不會進入黑名單或不免測名單。
+
+若 IP 位於 `post_pool_speed_test.force_test_list`，則每次入池後仍會強制測速；不達標時會從轉發池剔除並遷移回 `ip_blacklist`。三個名單會自動保持互斥：手動把 IP 加入其中一個名單時，會自動從另外兩個名單移除；歷史重複配置則按 `ip_blacklist` > `force_test_list` > `exempt_list` 清理。Cloudflare DNS 會在這輪入池後篩選完成後再按最終轉發池同步，避免把剛剔除的低速 IP 同步出去。
 
 若啟用黑名單 IP 定時測速，程式會按 `blacklist_speed_test.interval` 對 `ip_blacklist` 裡的單個 IP 做並發測速，週期必須以小時為單位，例如 `1h`、`24h`；速度達到 `post_pool_speed_test.min_mbps` 時會自動解除黑名單，並加入 `post_pool_speed_test.force_test_list` 入池不免測速名單。CIDR 黑名單不會展開測速，避免一次性產生過多候選。
 
@@ -252,8 +258,13 @@ DNS 同步分為兩類：
 | `post_pool_speed_test.min_mbps` | `1` | 入池後逐個測速最低速度，低於此值會從轉發池剔除 |
 | `post_pool_speed_test.timeout` | `5s` | 入池後單個 IP 最長測速時間 |
 | `post_pool_speed_test.auto_blacklist` | `false` | 入池後測速不達標的 IP 是否自動加入 `ip_blacklist` |
-| `post_pool_speed_test.exempt_list` | `[]` | 入池後測速免測名單；測速達標 IP 會自動加入，後續入池後測速會跳過 |
+| `post_pool_speed_test.exempt_list` | `[]` | 入池後測速免測名單；精確 IP 可固定入池，CIDR 只作為免測匹配規則 |
 | `post_pool_speed_test.force_test_list` | `[]` | 入池後不免測速名單；此名單中的 IP 每次入池後都要測速，不達標會遷移回 `ip_blacklist` |
+| `post_pool_speed_test.exempt_direct_pool_enabled` | `true` | 免測名單中的精確 IP 是否跳過掃描直接固定入池，且不計入 `valid_ip_count` / `pool_size` |
+| `post_pool_speed_test.exempt_recovery_evict_enabled` | `true` | 固定免測速 IP 長期停留冷卻池時，是否自動移出免測名單 |
+| `post_pool_speed_test.exempt_recovery_window` | `24h` | 固定免測速 IP 冷卻占比統計窗口 |
+| `post_pool_speed_test.exempt_recovery_max_ratio` | `0.6` | 冷卻占比淘汰門檻，範圍 0-1 |
+| `post_pool_speed_test.exempt_recovery_min_samples` | `20` | 觸發冷卻占比判斷前需要的最小觀察樣本數 |
 | `blacklist_speed_test.enabled` | `false` | 是否定時對黑名單中的單個 IP 測速 |
 | `blacklist_speed_test.interval` | `24h` | 黑名單 IP 定時測速週期；必須以小時為單位 |
 | `blacklist_speed_test.timeout` | `5s` | 黑名單中單個 IP 的測速時長 |
@@ -313,7 +324,7 @@ make build
 生成三個 Linux 架構版本：
 
 ```bash
-make release VERSION=v0.17.21
+make release VERSION=v0.18.0
 ```
 
 ## 命令列

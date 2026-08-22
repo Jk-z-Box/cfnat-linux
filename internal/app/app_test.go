@@ -196,6 +196,35 @@ func TestFilterRecoveryResultsExcludesCoolingIPs(t *testing.T) {
 	assertIPs(t, filtered, "192.0.2.1", "192.0.2.3")
 }
 
+func TestPinnedExemptIPsDoNotCountTowardDynamicPoolSize(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.PoolSize = 2
+	cfg.ValidIPCount = 3
+	cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = true
+	cfg.PostPoolSpeedTest.ExemptList = []string{"192.0.2.100", "192.0.2.101", "192.0.2.0/24"}
+	app := New(cfg, nil, nil, "v0.18.0", "")
+	app.pool = []scanner.Result{result("192.0.2.100", 10), result("192.0.2.101", 11)}
+	app.mu.Lock()
+	pool := app.composeForwardPoolLocked([]scanner.Result{result("192.0.2.1", 20), result("192.0.2.2", 30)})
+	app.mu.Unlock()
+	assertIPs(t, pool, "192.0.2.100", "192.0.2.101", "192.0.2.1", "192.0.2.2")
+	if app.state.PinnedPool.Total != 2 || app.state.PinnedPool.Active != 2 || app.state.PinnedPool.DynamicLimit != 2 {
+		t.Fatalf("pinned state = %+v", app.state.PinnedPool)
+	}
+}
+
+func TestFilterPinnedResultsExcludesDirectPoolIPsFromScanResults(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = true
+	cfg.PostPoolSpeedTest.ExemptList = []string{"192.0.2.100"}
+	app := New(cfg, nil, nil, "v0.18.0", "")
+	filtered := app.filterPinnedResults([]scanner.Result{
+		result("192.0.2.1", 80),
+		result("192.0.2.100", 90),
+	})
+	assertIPs(t, filtered, "192.0.2.1")
+}
+
 func TestApplyBlacklistNowPrunesPoolAndRecovery(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.IPBlacklist = []string{"192.0.2.2", "198.51.100.0/24"}
