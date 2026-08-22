@@ -1,4 +1,11 @@
-#!/usr/bin/env bash
+#!/bin/sh
+if [ -z "${BASH_VERSION:-}" ]; then
+  if [ -f /etc/openwrt_release ] && ! command -v bash >/dev/null 2>&1; then
+    opkg update
+    opkg install bash
+  fi
+  exec bash "$0" "$@"
+fi
 set -Eeuo pipefail
 
 PROJECT_NAME="cfnat-linux"
@@ -7,6 +14,7 @@ INSTALL_BIN="/usr/local/bin/cfnat"
 CONFIG_DIR="/etc/cfnat"
 STATE_DIR="/var/lib/cfnat"
 SERVICE_FILE="/etc/systemd/system/cfnat.service"
+OPENWRT_SERVICE_FILE="/etc/init.d/cfnat"
 WEB_RESTART_SERVICE_FILE="/etc/systemd/system/cfnat-web-restart.service"
 WEB_RESTART_PATH_FILE="/etc/systemd/system/cfnat-web-restart.path"
 UPDATE_SERVICE_FILE="/etc/systemd/system/cfnat-update.service"
@@ -17,6 +25,23 @@ PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 die() { echo "错误: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 retry() { echo "输入无效: $*，请重新输入。" >&2; }
+
+sha256_check_file() {
+  local sums_file="$1"
+  if sha256sum --check --status "${sums_file}" >/dev/null 2>&1; then
+    return 0
+  fi
+  sha256sum -c -s "${sums_file}" >/dev/null 2>&1
+}
+
+sha256_check_stdin() {
+  local data
+  data="$(cat)"
+  if printf '%s\n' "${data}" | sha256sum --check --status >/dev/null 2>&1; then
+    return 0
+  fi
+  printf '%s\n' "${data}" | sha256sum -c -s >/dev/null 2>&1
+}
 
 prompt_listen() {
   local value port_number
@@ -284,7 +309,20 @@ prompt_dns_settings() {
 }
 
 [[ "${EUID}" -eq 0 ]] || die "请使用 root 运行：sudo ./scripts/install.sh"
-command -v systemctl >/dev/null 2>&1 || die "当前系统未使用 systemd"
+if [[ -f /etc/openwrt_release ]]; then
+  INIT_SYSTEM="openwrt"
+  info "检测到 OpenWrt，使用 procd 服务管理"
+  opkg update
+  for pkg in bash ca-bundle ca-certificates curl tar coreutils-sha256sum coreutils-install coreutils-nohup grep sed gawk; do
+    opkg list-installed "$pkg" >/dev/null 2>&1 || opkg install "$pkg" || true
+  done
+  command -v install >/dev/null 2>&1 || opkg install coreutils-install
+  command -v sha256sum >/dev/null 2>&1 || opkg install coreutils-sha256sum
+elif command -v systemctl >/dev/null 2>&1; then
+  INIT_SYSTEM="systemd"
+else
+  die "当前系统暂只支持 systemd 或 OpenWrt procd"
+fi
 [[ -f "${PROJECT_DIR}/go.mod" ]] || die "请在完整项目目录中运行安装脚本"
 
 case "$(uname -m)" in
@@ -298,10 +336,12 @@ TMP_DIR="$(mktemp -d)"
 cleanup() { rm -rf "${TMP_DIR}"; }
 trap cleanup EXIT
 
+install -d -o root -g root -m 0755 /usr/local/bin
+
 BUNDLED_BIN="${PROJECT_DIR}/dist/cfnat-linux-${GO_ARCH}"
 if [[ -f "${BUNDLED_BIN}" && -f "${PROJECT_DIR}/dist/SHA256SUMS" ]]; then
   command -v sha256sum >/dev/null 2>&1 || die "缺少 sha256sum，无法校验内置二进制"
-  (cd "${PROJECT_DIR}/dist" && sha256sum --check --status SHA256SUMS) || die "内置二进制校验失败"
+  (cd "${PROJECT_DIR}/dist" && sha256_check_file SHA256SUMS) || die "内置二进制校验失败"
   info "安装已校验的 Linux ${GO_ARCH} 二进制"
   install -m 0755 "${BUNDLED_BIN}" "${INSTALL_BIN}"
 else
@@ -312,7 +352,7 @@ else
     GO_FILE="go${GO_VERSION}.linux-${GO_ARCH}.tar.gz"
     info "下载临时 Go ${GO_VERSION} 工具链"
     curl --fail --location --retry 3 "https://go.dev/dl/${GO_FILE}" -o "${TMP_DIR}/${GO_FILE}"
-    echo "${GO_SHA}  ${TMP_DIR}/${GO_FILE}" | sha256sum --check --status || die "Go 工具链校验失败"
+    echo "${GO_SHA}  ${TMP_DIR}/${GO_FILE}" | sha256_check_stdin || die "Go 工具链校验失败"
     mkdir -p "${TMP_DIR}/toolchain"
     tar -xzf "${TMP_DIR}/${GO_FILE}" -C "${TMP_DIR}/toolchain"
     BUILD_GO="${TMP_DIR}/toolchain/go/bin/go"
@@ -322,11 +362,18 @@ else
   install -m 0755 "${TMP_DIR}/cfnat" "${INSTALL_BIN}"
 fi
 
-if ! getent passwd cfnat >/dev/null; then
-  useradd --system --home-dir "${STATE_DIR}" --shell /usr/sbin/nologin cfnat
+if [[ "${INIT_SYSTEM}" == "openwrt" ]]; then
+  RUN_USER="root"
+  RUN_GROUP="root"
+else
+  RUN_USER="cfnat"
+  RUN_GROUP="cfnat"
+  if ! getent passwd cfnat >/dev/null; then
+    useradd --system --home-dir "${STATE_DIR}" --shell /usr/sbin/nologin cfnat
+  fi
 fi
-install -d -o root -g cfnat -m 0750 "${CONFIG_DIR}"
-install -d -o cfnat -g cfnat -m 0750 "${STATE_DIR}"
+install -d -o root -g "${RUN_GROUP}" -m 0750 "${CONFIG_DIR}"
+install -d -o "${RUN_USER}" -g "${RUN_GROUP}" -m 0750 "${STATE_DIR}"
 
 if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   info "生成配置文件"
@@ -447,18 +494,63 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
 }
 EOF
   printf 'CF_API_TOKEN=%q\n' "${TOKEN}" > "${CONFIG_DIR}/cfnat.env"
-  chown root:cfnat "${CONFIG_DIR}/config.json" "${CONFIG_DIR}/cfnat.env"
+  chown root:"${RUN_GROUP}" "${CONFIG_DIR}/config.json" "${CONFIG_DIR}/cfnat.env"
   chmod 0660 "${CONFIG_DIR}/config.json"
   chmod 0640 "${CONFIG_DIR}/cfnat.env"
 else
   info "保留已有配置 ${CONFIG_DIR}/config.json"
   cp -p "${CONFIG_DIR}/config.json" "${CONFIG_DIR}/config.json.bak"
   "${INSTALL_BIN}" -config "${CONFIG_DIR}/config.json" migrate-config
-  chown root:cfnat "${CONFIG_DIR}/config.json"
+  chown root:"${RUN_GROUP}" "${CONFIG_DIR}/config.json"
   chmod 0660 "${CONFIG_DIR}/config.json"
-  [[ -f "${CONFIG_DIR}/cfnat.env" ]] || { touch "${CONFIG_DIR}/cfnat.env"; chown root:cfnat "${CONFIG_DIR}/cfnat.env"; chmod 0640 "${CONFIG_DIR}/cfnat.env"; }
+  [[ -f "${CONFIG_DIR}/cfnat.env" ]] || { touch "${CONFIG_DIR}/cfnat.env"; chown root:"${RUN_GROUP}" "${CONFIG_DIR}/cfnat.env"; chmod 0640 "${CONFIG_DIR}/cfnat.env"; }
 fi
 
+if [[ "${INIT_SYSTEM}" == "openwrt" ]]; then
+  install -d -o root -g root -m 0755 /usr/local/lib/cfnat
+  cat > /usr/local/lib/cfnat/run-openwrt.sh <<'EOF'
+#!/bin/sh
+set -a
+[ -f /etc/cfnat/cfnat.env ] && . /etc/cfnat/cfnat.env
+exec /usr/local/bin/cfnat -config /etc/cfnat/config.json run
+EOF
+  chmod 0755 /usr/local/lib/cfnat/run-openwrt.sh
+  cat > /usr/local/lib/cfnat/restart-watch-openwrt.sh <<'EOF'
+#!/bin/sh
+while :; do
+  if [ -e /var/lib/cfnat/restart-request ]; then
+    rm -f /var/lib/cfnat/restart-request
+    /etc/init.d/cfnat restart >/dev/null 2>&1 || true
+    exit 0
+  fi
+  sleep 2
+done
+EOF
+  chmod 0755 /usr/local/lib/cfnat/restart-watch-openwrt.sh
+  cat > "${OPENWRT_SERVICE_FILE}" <<'EOF'
+#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+USE_PROCD=1
+
+start_service() {
+  procd_open_instance main
+  procd_set_param command /usr/local/lib/cfnat/run-openwrt.sh
+  procd_set_param respawn 10 5 5
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+
+  procd_open_instance restart_watch
+  procd_set_param command /usr/local/lib/cfnat/restart-watch-openwrt.sh
+  procd_set_param respawn 5 3 5
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}
+EOF
+  chmod 0755 "${OPENWRT_SERVICE_FILE}"
+else
 cat > "${SERVICE_FILE}" <<'EOF'
 [Unit]
 Description=Cloudflare IP optimizer, TCP forwarder and DNS synchronizer
@@ -540,18 +632,41 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 EOF
+fi
 
 install -d -o root -g root -m 0755 /usr/local/lib/cfnat
 install -m 0755 "${PROJECT_DIR}/scripts/cfnatctl.sh" /usr/local/bin/cfnatctl
 install -m 0755 "${PROJECT_DIR}/scripts/uninstall.sh" /usr/local/lib/cfnat/uninstall.sh
+if [[ "${INIT_SYSTEM}" == "openwrt" ]]; then
+  ln -sf /usr/local/bin/cfnat /usr/bin/cfnat
+  ln -sf /usr/local/bin/cfnatctl /usr/bin/cfnatctl
+fi
 
 "${INSTALL_BIN}" -config "${CONFIG_DIR}/config.json" check-config
-systemctl daemon-reload
-systemctl enable cfnat
-systemctl enable --now cfnat-web-restart.path
-systemctl enable --now cfnat-update.timer
-systemctl restart cfnat
+if [[ "${INIT_SYSTEM}" == "openwrt" ]]; then
+  "${OPENWRT_SERVICE_FILE}" enable
+  "${OPENWRT_SERVICE_FILE}" restart
+  if command -v crontab >/dev/null 2>&1; then
+    tmp_cron="$(mktemp)"
+    crontab -l 2>/dev/null | grep -v '/usr/local/bin/cfnatctl update --auto' > "${tmp_cron}" || true
+    echo '17 * * * * /usr/local/bin/cfnatctl update --auto >/tmp/cfnat-update.log 2>&1' >> "${tmp_cron}"
+    crontab "${tmp_cron}" || true
+    rm -f "${tmp_cron}"
+    /etc/init.d/cron enable >/dev/null 2>&1 || true
+    /etc/init.d/cron restart >/dev/null 2>&1 || true
+  fi
+else
+  systemctl daemon-reload
+  systemctl enable cfnat
+  systemctl enable --now cfnat-web-restart.path
+  systemctl enable --now cfnat-update.timer
+  systemctl restart cfnat
+fi
 info "安装完成"
 echo "状态: cfnatctl status"
 echo "日志: cfnatctl logs"
-echo "管理面板: sudo cfnatctl"
+if [[ "${INIT_SYSTEM}" == "openwrt" ]]; then
+  echo "管理面板: cfnatctl"
+else
+  echo "管理面板: sudo cfnatctl"
+fi

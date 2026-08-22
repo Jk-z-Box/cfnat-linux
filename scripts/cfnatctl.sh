@@ -6,6 +6,43 @@ ENV_FILE="/etc/cfnat/cfnat.env"
 BIN="/usr/local/bin/cfnat"
 AUTH_OK=false
 
+is_openwrt() {
+  [[ -f /etc/openwrt_release ]]
+}
+
+service_name() {
+  if is_openwrt; then
+    echo "procd 服务"
+  else
+    echo "systemd 服务"
+  fi
+}
+
+service_active() {
+  if is_openwrt; then
+    /etc/init.d/cfnat status >/dev/null 2>&1
+  else
+    systemctl is-active --quiet cfnat
+  fi
+}
+
+service_do() {
+  local action="$1"
+  if is_openwrt; then
+    /etc/init.d/cfnat "${action}"
+  else
+    systemctl "${action}" cfnat
+  fi
+}
+
+follow_logs() {
+  if is_openwrt; then
+    logread -f | grep --line-buffered -E 'run-openwrt\.sh|cfnat-linux'
+  else
+    journalctl -u cfnat -f
+  fi
+}
+
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     echo "此操作需要管理员权限，请运行: sudo cfnatctl" >&2
@@ -58,13 +95,9 @@ pause_screen() {
   read -r -p "按回车键返回菜单..." _
 }
 
-service_active() {
-  systemctl is-active --quiet cfnat
-}
-
 restart_if_running() {
   if service_active; then
-    systemctl restart cfnat
+    service_do restart
     echo "配置已保存，服务已重启并重新扫描。"
   else
     echo "配置已保存。服务当前关闭，启动后生效。"
@@ -82,9 +115,9 @@ show_dashboard() {
   echo "                  cfnat-linux 管理面板"
   echo "============================================================"
   if service_active; then
-    echo "systemd 服务    : 运行中"
+    echo "$(service_name)    : 运行中"
   else
-    echo "systemd 服务    : 已停止"
+    echo "$(service_name)    : 已停止"
   fi
   echo "------------------------------------------------------------"
   "${BIN}" -config "${CONFIG_FILE}" status 2>&1 || echo "状态读取失败，请检查配置和日志。"
@@ -377,7 +410,9 @@ toggle_auto_update() {
     case "${value}" in
       y|Y|yes|YES|Yes)
         set_config_no_restart update_auto_update_enabled true || return
-        systemctl enable --now cfnat-update.timer >/dev/null 2>&1 || true
+        if ! is_openwrt; then
+          systemctl enable --now cfnat-update.timer >/dev/null 2>&1 || true
+        fi
         echo "后台自动更新已启用。"
         return
         ;;
@@ -661,10 +696,10 @@ toggle_service() {
   require_root || return
   require_auth || return
   if service_active; then
-    systemctl stop cfnat
+    service_do stop
     echo "服务已关闭。"
   else
-    systemctl start cfnat
+    service_do start
     echo "服务已启动，正在扫描。"
   fi
 }
@@ -672,7 +707,7 @@ toggle_service() {
 restart_scan() {
   require_root || return
   require_auth || return
-  systemctl restart cfnat
+  service_do restart
   echo "服务已重启，正在重新扫描。"
 }
 
@@ -707,7 +742,7 @@ interactive_menu() {
       1) toggle_service; pause_screen ;;
       2) restart_scan; pause_screen ;;
       3) config_menu ;;
-      4) journalctl -u cfnat -f ;;
+      4) follow_logs ;;
       5) "${BIN}" -config "${CONFIG_FILE}" scan; pause_screen ;;
       6) uninstall_service ;;
       7) run_update manual; pause_screen ;;
@@ -720,8 +755,8 @@ interactive_menu() {
 case "${1:-menu}" in
   menu) interactive_menu ;;
   status) show_dashboard ;;
-  start|stop|restart) require_root; require_auth || exit 1; systemctl "$1" cfnat ;;
-  logs) journalctl -u cfnat -f ;;
+  start|stop|restart) require_root; require_auth || exit 1; service_do "$1" ;;
+  logs) follow_logs ;;
   pool) "${BIN}" -config "${CONFIG_FILE}" status ;;
   check) "${BIN}" -config "${CONFIG_FILE}" check-config ;;
   scan) require_root; restart_scan ;;

@@ -22,11 +22,11 @@
 - DNS 不會預設跟隨 2 秒延遲排序同步；可選擇開啟「延遲排序冷卻同步」，按自訂冷卻時間低頻更新。
 - DNS 採用「先建立新記錄、再刪除舊記錄」，掃描失敗時絕不清空解析。
 - 掃描過程中分批熱更新只更新 TCP 轉發池，不由掃描流程觸發 Cloudflare DNS；整輪掃描完成後再按最終結果同步，避免分批掃描期間高頻更新 DNS。掃描期間若健康檢查剔除了目前已同步到 Cloudflare 的 IP，會立即執行保護性 DNS 同步；其它非保護性 DNS 變更會延後到掃描完成。若最終結果與已同步 IP 相同，會跳過重複同步。
-- systemd 開機啟動、自動重啟、journald 日誌與低權限執行。
-- 首次掃描無結果時保持背景執行並定期重試，不再進入 systemd 重啟循環。
+- 支援 systemd 與 OpenWrt procd 開機啟動、自動重啟與即時日誌；systemd 平台預設低權限執行，OpenWrt 平台依 procd/root 環境執行。
+- 首次掃描無結果時保持背景執行並定期重試，不再進入服務管理器重啟循環。
 - 顯示當日掃描/重選觸發次數，方便觀察是否頻繁重掃。
 - 管理面板可選啟用管理密碼，支援開關與修改；配置只保存 SHA-256 雜湊，不保存明文。
-- 定時檢查 GitHub Release；有新版本時顯示在狀態面板，並可選擇啟用 systemd timer 背景自動更新。
+- 定時檢查 GitHub Release；有新版本時顯示在狀態面板，systemd 平台可用 timer 背景自動更新，OpenWrt 平台使用 cron 兜底。
 - 冷卻恢復池加入恢復冷卻時間與連續成功門檻，避免抖動 IP 被剔除後立刻回池造成反覆刷屏。
 - 健康 IP 不足但已有掃描正在進行時，僅以 debug 記錄跳過重複重選，避免 warning 日誌過於吵雜。
 - Web「配置文件修改」使用 `/var/lib/cfnat` 生成臨時校驗文件，避免低權限服務在 `/etc/cfnat` 目錄建立臨時文件時出現 permission denied。
@@ -51,16 +51,18 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 
 ## 一鍵安裝
 
-安裝機需要 systemd、curl、tar 和 sha256sum。若系統沒有 Go，安裝腳本會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
+安裝機支援 Debian/Ubuntu 等 systemd Linux，以及 OpenWrt x86_64。腳本會優先使用包內已校驗二進位；缺少必要工具時，systemd 平台需具備 curl、tar 和 sha256sum，OpenWrt 會透過 opkg 自動補齊 bash、curl、tar、sha256sum、install 等依賴。若系統沒有可用二進位且沒有 Go，安裝腳本才會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
-```bash
-curl -fL -o cfnat-linux-v0.18.0.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/download/v0.18.0/cfnat-linux-v0.18.0.tar.gz
+```sh
+curl -fL -o cfnat-linux-latest.tar.gz \
+https://github.com/Jk-z-Box/cfnat-linux/releases/latest/download/cfnat-linux-latest.tar.gz
 
-tar -xzf cfnat-linux-v0.18.0.tar.gz
+tar -xzf cfnat-linux-latest.tar.gz
 cd cfnat-linux
-sudo ./scripts/install.sh
+sh ./scripts/install.sh
 ```
+
+在 Debian/Ubuntu 等 systemd 系統中也可以使用 `sudo sh ./scripts/install.sh`；OpenWrt 預設以 root 登入，直接執行即可。
 
 安裝腳本會互動詢問：
 
@@ -82,12 +84,12 @@ sudo ./scripts/install.sh
 安裝完成後服務會立即進行首次優選。執行管理面板：
 
 ```bash
-sudo cfnatctl
+cfnatctl
 ```
 
 面板會顯示：
 
-- systemd 服務是否執行；
+- systemd/procd 服務是否執行；
 - 監聽 IP、連接埠和最大允許延遲；
 - 延遲監控間隔；
 - 下載測速篩選狀態與速度門檻；
@@ -103,7 +105,7 @@ sudo cfnatctl
 
 面板下方提供執行開關、立即重掃、診斷掃描、立即檢查並更新、修改設定、即時日誌以及一鍵關閉並解除安裝。執行狀態同時儲存於 `/var/lib/cfnat/state.json`。
 
-可在 `sudo cfnatctl` → 修改配置 中啟用管理密碼。啟用後，進入管理面板、啟停服務、重啟掃描、修改配置和解除安裝都需要輸入管理密碼；`status`、`logs`、`check` 等只讀命令不需要密碼。密碼以 SHA-256 雜湊形式保存在 `/etc/cfnat/config.json`。
+可在 `cfnatctl` → 修改配置 中啟用管理密碼。啟用後，進入管理面板、啟停服務、重啟掃描、修改配置和解除安裝都需要輸入管理密碼；`status`、`logs`、`check` 等只讀命令不需要密碼。密碼以 SHA-256 雜湊形式保存在 `/etc/cfnat/config.json`。
 
 ## Web 管理面板與 Shodan IP Panel
 
@@ -119,7 +121,7 @@ Web 面板目前可管理：
 
 - 查看 cfnat 完整狀態；
 - 查看 cfnat 與 Shodan 的統一狀態摘要，頁面透過 SSE 長連線接收實時狀態推送，不需要手動刷新，也不依賴固定 N 秒輪詢；
-- 查看折疊式 journald 即時日誌，內容對齊 SSH 菜單的 `journalctl -u cfnat -f`；
+- 查看折疊式即時日誌；systemd 平台對齊 SSH 菜單的 `journalctl -u cfnat -f`，OpenWrt 平台使用 `logread -f` 並只顯示 cfnat 相關行；
 - 暫停或恢復 TCP 轉發；Web 面板本身不會因此停止；
 - 觸發 cfnat 立即重新掃描；
 - 修改常用 cfnat 配置；
@@ -134,7 +136,7 @@ Web 面板目前可管理：
 - 執行 Shodan 查詢並下載生成的 IP 檔案。
 - 透過右上角「新增配置」彈窗建立 Shodan 配置；刪除配置按鈕放在新增配置旁，配置狀態、下載開關、下載連結與修改配置收納在折疊目錄中。
 
-Web 面板運行在 cfnat 服務內，保持低權限執行。安裝腳本會讓 cfnat 服務附加 `systemd-journal` 群組，以便 Web 面板讀取 `journalctl -u cfnat -f` 即時日誌。啟停服務、解除安裝和手動更新仍保留在 SSH 管理菜單中完成，避免 Web 面板持有 root 級 systemd 控制權限。
+Web 面板運行在 cfnat 服務內。systemd 平台保持低權限執行，安裝腳本會讓 cfnat 服務附加 `systemd-journal` 群組，以便 Web 面板讀取 `journalctl -u cfnat -f` 即時日誌；OpenWrt 平台使用 procd 管理並透過 `logread -f` 讀取 cfnat 日誌。啟停服務、解除安裝和手動更新仍保留在 SSH 管理菜單中完成。
 
 Shodan IP Panel 的資料保存在：
 
@@ -181,10 +183,10 @@ cfnatctl uninstall    # 確認後關閉並解除安裝
 
 服務會依 `update.check_interval` 定時查詢 GitHub 最新 Release，並把結果寫入 `/var/lib/cfnat/state.json`，所以 `cfnatctl status` 會顯示「已是最新」、「發現新版本」或「檢查失敗」。
 
-背景自動更新由 `cfnat-update.timer` 執行，預設會安裝 timer，但只有 `update.auto_update_enabled=true` 時才會真正下載新版 Release 包並執行安裝腳本。可在 `sudo cfnatctl` → 修改配置 中開關「定時檢查更新」和「背景自動更新」，也可以手動執行：
+背景自動更新由 `cfnat-update.timer` 執行，預設會安裝 timer，但只有 `update.auto_update_enabled=true` 時才會真正下載新版 Release 包並執行安裝腳本。可在 `cfnatctl` → 修改配置 中開關「定時檢查更新」和「背景自動更新」，也可以手動執行：
 
 ```bash
-sudo cfnatctl update
+cfnatctl update
 ```
 
 ## Cloudflare DNS 設定
@@ -346,7 +348,7 @@ cfnat version
 ## 安全與執行邊界
 
 - 服務以獨立的 `cfnat` 系統使用者執行。
-- systemd 開啟檔案系統、裝置、權限和核心相關的沙箱限制。
+- systemd 平台開啟檔案系統、裝置、權限和核心相關的沙箱限制；OpenWrt 平台遵循 procd 服務模型。
 - 僅保留綁定低連接埠所需的 `CAP_NET_BIND_SERVICE`。
 - TLS 預設校驗憑證，除非明確設定 `insecure_skip_verify=true`。
 - 這是四層 TCP 透傳，不終止 TLS，也不解析 VLESS、Trojan 等上層協定。
@@ -360,6 +362,6 @@ cfnat version
 sudo ./scripts/uninstall.sh
 ```
 
-或進入 `sudo cfnatctl`，選擇「一鍵關閉並解除安裝」。
+或進入 `cfnatctl`，選擇「一鍵關閉並解除安裝」。
 
 解除安裝腳本保留 `/etc/cfnat` 和 `/var/lib/cfnat`，防止誤刪 Token、設定和執行狀態。

@@ -189,7 +189,7 @@ func (w *webServer) handleCFNatRestartProcess(rw http.ResponseWriter, r *http.Re
 		w.render(rw, "触发重启进程失败："+err.Error())
 		return
 	}
-	w.redirect(rw, "已提交重启进程请求，systemd 将重启 cfnat 并重新优选。")
+	w.redirect(rw, "已提交重启进程请求，服务管理器将重启 cfnat 并重新优选。")
 }
 
 func (w *webServer) handleCFNatToggle(rw http.ResponseWriter, r *http.Request) {
@@ -263,22 +263,52 @@ func (w *webServer) handleLogEvents(rw http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return true
 	}
-	if !send("正在连接 journald：journalctl -u cfnat -n 120 -f") {
+	var cmd *exec.Cmd
+	filterOpenWrt := false
+	if _, err := exec.LookPath("journalctl"); err == nil {
+		if !send("正在连接 journald：journalctl -u cfnat -n 120 -f") {
+			return
+		}
+		cmd = exec.CommandContext(r.Context(), "journalctl", "-u", "cfnat", "-n", "120", "-f", "-o", "short-iso", "--no-pager")
+	} else if _, err := exec.LookPath("logread"); err == nil {
+		if !send("正在连接 OpenWrt 日志：logread -f") {
+			return
+		}
+		filterOpenWrt = true
+		if out, err := exec.CommandContext(r.Context(), "logread").Output(); err == nil {
+			lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+			matched := make([]string, 0, 120)
+			for _, line := range lines {
+				if isCFNatOpenWrtLogLine(line) {
+					matched = append(matched, line)
+					if len(matched) > 120 {
+						matched = matched[1:]
+					}
+				}
+			}
+			for _, line := range matched {
+				if !send(line) {
+					return
+				}
+			}
+		}
+		cmd = exec.CommandContext(r.Context(), "logread", "-f")
+	} else {
+		_ = send("无法读取日志：未找到 journalctl 或 logread")
 		return
 	}
-	cmd := exec.CommandContext(r.Context(), "journalctl", "-u", "cfnat", "-n", "120", "-f", "-o", "short-iso", "--no-pager")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		_ = send("无法读取 journalctl 输出：" + err.Error())
+		_ = send("无法读取日志输出：" + err.Error())
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		_ = send("无法读取 journalctl 错误输出：" + err.Error())
+		_ = send("无法读取日志错误输出：" + err.Error())
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		_ = send("无法启动 journalctl：" + err.Error())
+		_ = send("无法启动日志读取：" + err.Error())
 		return
 	}
 	done := make(chan struct{})
@@ -288,12 +318,16 @@ func (w *webServer) handleLogEvents(rw http.ResponseWriter, r *http.Request) {
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024)
 		for scanner.Scan() {
-			if !send(scanner.Text()) {
+			line := scanner.Text()
+			if filterOpenWrt && !isCFNatOpenWrtLogLine(line) {
+				continue
+			}
+			if !send(line) {
 				return
 			}
 		}
 		if err := scanner.Err(); err != nil && r.Context().Err() == nil {
-			_ = send("journalctl 读取中断：" + err.Error())
+			_ = send("日志读取中断：" + err.Error())
 		}
 	}()
 	errDone := make(chan string, 1)
@@ -315,11 +349,15 @@ func (w *webServer) handleLogEvents(rw http.ResponseWriter, r *http.Request) {
 	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
 		msg := strings.TrimSpace(<-errDone)
 		if msg != "" {
-			_ = send("journalctl 退出：" + msg)
+			_ = send("日志读取退出：" + msg)
 		} else {
-			_ = send("journalctl 退出：" + err.Error())
+			_ = send("日志读取退出：" + err.Error())
 		}
 	}
+}
+
+func isCFNatOpenWrtLogLine(line string) bool {
+	return strings.Contains(line, "run-openwrt.sh") || strings.Contains(line, "cfnat-linux")
 }
 
 func (w *webServer) handleCFNatConfig(rw http.ResponseWriter, r *http.Request) {
