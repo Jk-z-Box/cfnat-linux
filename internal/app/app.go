@@ -139,6 +139,7 @@ type App struct {
 	recoveryAt             map[netip.Addr]time.Time
 	recoveryOK             map[netip.Addr]int
 	failures               map[netip.Addr]int
+	pinnedEligible         map[netip.Addr]scanner.Result
 	scanPaused             bool
 	nextBlacklistSpeedTest time.Time
 	state                  RuntimeState
@@ -171,14 +172,15 @@ func New(cfg config.Config, logger *slog.Logger, s *scanner.Scanner, version, co
 	}
 	app := &App{
 		cfg: cfg, logger: logger, scanner: s,
-		proxy:      proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
-		dns:        cloudflare.New(cfg.DNS),
-		version:    version,
-		configPath: configPath,
-		recoveryAt: make(map[netip.Addr]time.Time),
-		recoveryOK: make(map[netip.Addr]int),
-		failures:   make(map[netip.Addr]int),
-		state:      state,
+		proxy:          proxy.New(cfg.Listen, cfg.TargetPort, cfg.DialTimeout.Value(), logger),
+		dns:            cloudflare.New(cfg.DNS),
+		version:        version,
+		configPath:     configPath,
+		recoveryAt:     make(map[netip.Addr]time.Time),
+		recoveryOK:     make(map[netip.Addr]int),
+		failures:       make(map[netip.Addr]int),
+		pinnedEligible: make(map[netip.Addr]scanner.Result),
+		state:          state,
 	}
 	app.eventCond = sync.NewCond(&app.eventMu)
 	return app
@@ -200,7 +202,6 @@ func (a *App) Run(ctx context.Context) error {
 		a.setStatus("error")
 		return err
 	}
-	a.refreshPinnedPool("startup")
 	go func() {
 		if err := a.rescan(ctx, "startup"); err != nil {
 			if ctx.Err() != nil {
@@ -383,9 +384,12 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	a.incrementDailyScanLocked(now)
 	a.state.Status = "scanning"
 	a.state.Scan = ScanState{InProgress: true, Completed: false, Reason: reason, StartedAt: &now}
+	a.mu.Unlock()
+	a.refreshPinnedPool(ctx, reason)
+	a.mu.Lock()
 	scanBaseHealthy := a.currentHealthyDynamicPoolLocked()
 	scanCfg := a.cfg
-	for ip := range a.pinnedExactSetLocked() {
+	for ip := range a.configuredPinnedExactSetLocked() {
 		scanCfg.IPBlacklist = append(scanCfg.IPBlacklist, ip.String())
 	}
 	scannerRef := scanner.New(scanCfg, a.logger)
@@ -446,7 +450,7 @@ func (a *App) rescan(ctx context.Context, reason string) error {
 	}
 	a.mu.Lock()
 	a.pool = pool
-	a.updatePinnedPoolStateLocked(a.pinnedExactSetLocked())
+	a.updatePinnedPoolStateLocked(a.configuredPinnedExactSetLocked())
 	a.failures = make(map[netip.Addr]int)
 	a.state.Status = "running"
 	a.state.PrimaryIP = pool[0].IP.String()
@@ -501,7 +505,7 @@ func (a *App) applyScanProgress(reason string, results []scanner.Result) {
 	}
 	a.mu.Lock()
 	a.pool = pool
-	a.updatePinnedPoolStateLocked(a.pinnedExactSetLocked())
+	a.updatePinnedPoolStateLocked(a.configuredPinnedExactSetLocked())
 	for _, result := range results {
 		a.failures[result.IP] = 0
 	}
@@ -556,7 +560,7 @@ func (a *App) currentHealthyPoolLocked() []scanner.Result {
 }
 
 func (a *App) currentHealthyDynamicPoolLocked() []scanner.Result {
-	pinned := a.pinnedExactSetLocked()
+	pinned := a.configuredPinnedExactSetLocked()
 	healthy := a.currentHealthyPoolLocked()
 	if len(pinned) == 0 {
 		return healthy
@@ -571,7 +575,7 @@ func (a *App) currentHealthyDynamicPoolLocked() []scanner.Result {
 	return dynamic
 }
 
-func (a *App) pinnedExactSetLocked() map[netip.Addr]struct{} {
+func (a *App) configuredPinnedExactSetLocked() map[netip.Addr]struct{} {
 	if !a.cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled {
 		return nil
 	}
@@ -593,30 +597,55 @@ func (a *App) pinnedExactSetLocked() map[netip.Addr]struct{} {
 	return set
 }
 
+func (a *App) activePinnedResultsLocked() []scanner.Result {
+	configured := a.configuredPinnedExactSetLocked()
+	if len(configured) == 0 {
+		return nil
+	}
+	existing := make(map[netip.Addr]scanner.Result, len(a.pool))
+	for _, result := range a.pool {
+		existing[result.IP] = result
+	}
+	if !a.cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled {
+		results := make([]scanner.Result, 0, len(configured))
+		for ip := range configured {
+			result, ok := existing[ip]
+			if !ok {
+				result = scanner.Result{IP: ip, LatencyMS: 1 << 61, CheckedAt: time.Now().UTC()}
+			}
+			results = append(results, result)
+		}
+		sortResults(results)
+		return results
+	}
+	results := make([]scanner.Result, 0, len(a.pinnedEligible))
+	for ip, result := range a.pinnedEligible {
+		if _, ok := configured[ip]; !ok {
+			delete(a.pinnedEligible, ip)
+			continue
+		}
+		if old, ok := existing[ip]; ok {
+			result = old
+		}
+		results = append(results, result)
+	}
+	sortResults(results)
+	return results
+}
+
 func (a *App) composeForwardPoolLocked(dynamic []scanner.Result) []scanner.Result {
-	pinnedSet := a.pinnedExactSetLocked()
+	pinned := a.activePinnedResultsLocked()
 	recovering := make(map[netip.Addr]struct{}, len(a.recovery))
 	for _, result := range a.recovery {
 		recovering[result.IP] = struct{}{}
 	}
-	existing := make(map[netip.Addr]scanner.Result, len(a.pool)+len(dynamic))
-	for _, result := range a.pool {
-		existing[result.IP] = result
-	}
-	for _, result := range dynamic {
-		existing[result.IP] = result
-	}
-	merged := make([]scanner.Result, 0, len(dynamic)+len(pinnedSet))
+	merged := make([]scanner.Result, 0, len(dynamic)+len(pinned))
 	seen := map[netip.Addr]struct{}{}
-	for ip := range pinnedSet {
-		if _, ok := recovering[ip]; ok {
+	for _, result := range pinned {
+		if _, ok := recovering[result.IP]; ok {
 			continue
 		}
-		result, ok := existing[ip]
-		if !ok {
-			result = scanner.Result{IP: ip, LatencyMS: 1 << 61, CheckedAt: time.Now().UTC()}
-		}
-		seen[ip] = struct{}{}
+		seen[result.IP] = struct{}{}
 		merged = append(merged, result)
 	}
 	for _, result := range dynamic {
@@ -633,12 +662,12 @@ func (a *App) composeForwardPoolLocked(dynamic []scanner.Result) []scanner.Resul
 		merged = append(merged, result)
 	}
 	sortResults(merged)
-	a.updatePinnedPoolStateLocked(pinnedSet)
+	a.updatePinnedPoolStateLocked(a.configuredPinnedExactSetLocked())
 	return merged
 }
 
 func (a *App) dynamicPoolLocked() []scanner.Result {
-	pinned := a.pinnedExactSetLocked()
+	pinned := a.configuredPinnedExactSetLocked()
 	dynamic := make([]scanner.Result, 0, len(a.pool))
 	for _, result := range a.pool {
 		if _, ok := pinned[result.IP]; ok {
@@ -676,7 +705,103 @@ func (a *App) updatePinnedPoolStateLocked(pinnedSet map[netip.Addr]struct{}) {
 	a.state.PinnedPool.DynamicLimit = a.cfg.PoolSize
 }
 
-func (a *App) refreshPinnedPool(reason string) {
+func (a *App) refreshPinnedEligibility(ctx context.Context, reason string) {
+	a.mu.Lock()
+	cfg := a.cfg
+	configured := a.configuredPinnedExactSetLocked()
+	if len(configured) == 0 {
+		a.pinnedEligible = make(map[netip.Addr]scanner.Result)
+		a.mu.Unlock()
+		return
+	}
+	for ip := range a.pinnedEligible {
+		if _, ok := configured[ip]; !ok {
+			delete(a.pinnedEligible, ip)
+		}
+	}
+	if !cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled {
+		a.mu.Unlock()
+		return
+	}
+	inPool := make(map[netip.Addr]struct{}, len(a.pool))
+	for _, result := range a.pool {
+		inPool[result.IP] = struct{}{}
+	}
+	inRecovery := make(map[netip.Addr]struct{}, len(a.recovery))
+	for _, result := range a.recovery {
+		inRecovery[result.IP] = struct{}{}
+		delete(a.pinnedEligible, result.IP)
+	}
+	candidates := make([]netip.Addr, 0, len(configured))
+	for ip := range configured {
+		if _, ok := inPool[ip]; ok {
+			continue
+		}
+		if _, ok := inRecovery[ip]; ok {
+			continue
+		}
+		candidates = append(candidates, ip)
+	}
+	a.mu.Unlock()
+	if len(candidates) == 0 {
+		return
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].String() < candidates[j].String() })
+	a.logger.Info("开始免测速名单固定入池延迟筛选", "reason", reason, "candidates", len(candidates), "max_latency", cfg.PostPoolSpeedTest.ExemptMaxLatency.Value(), "probe_mode", cfg.PostPoolSpeedTest.ExemptProbeMode, "concurrency", cfg.PostPoolSpeedTest.ExemptLatencyConcurrency)
+	probeCfg := cfg
+	probeCfg.MaxLatency = cfg.PostPoolSpeedTest.ExemptMaxLatency
+	probeScanner := scanner.New(probeCfg, a.logger)
+	type probeResult struct {
+		ip     netip.Addr
+		result scanner.Result
+		err    error
+	}
+	jobs := make(chan netip.Addr)
+	results := make(chan probeResult, len(candidates))
+	workers := min(cfg.PostPoolSpeedTest.ExemptLatencyConcurrency, len(candidates))
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ip := range jobs {
+				checked, err := probeScanner.ProbeWithMode(ctx, ip, cfg.PostPoolSpeedTest.ExemptProbeMode)
+				results <- probeResult{ip: ip, result: checked, err: err}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, ip := range candidates {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- ip:
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	passed := 0
+	failed := 0
+	for item := range results {
+		a.mu.Lock()
+		if item.err != nil {
+			delete(a.pinnedEligible, item.ip)
+			failed++
+		} else {
+			a.pinnedEligible[item.ip] = item.result
+			passed++
+		}
+		a.mu.Unlock()
+	}
+	a.logger.Info("免测速名单固定入池延迟筛选完成", "reason", reason, "passed", passed, "failed", failed, "max_latency", cfg.PostPoolSpeedTest.ExemptMaxLatency.Value(), "probe_mode", cfg.PostPoolSpeedTest.ExemptProbeMode)
+}
+
+func (a *App) refreshPinnedPool(ctx context.Context, reason string) {
+	a.refreshPinnedEligibility(ctx, reason)
 	a.mu.Lock()
 	dynamic := a.dynamicPoolLocked()
 	pool := a.composeForwardPoolLocked(dynamic)
@@ -690,7 +815,7 @@ func (a *App) refreshPinnedPool(reason string) {
 		}
 	}
 	a.state.PinnedPool.LastEvicted = nil
-	a.updatePinnedPoolStateLocked(a.pinnedExactSetLocked())
+	a.updatePinnedPoolStateLocked(a.configuredPinnedExactSetLocked())
 	a.mu.Unlock()
 	if changed {
 		a.proxy.Update(pool)
@@ -727,7 +852,7 @@ func (a *App) filterPinnedResults(results []scanner.Result) []scanner.Result {
 		return nil
 	}
 	a.mu.Lock()
-	pinned := a.pinnedExactSetLocked()
+	pinned := a.configuredPinnedExactSetLocked()
 	a.mu.Unlock()
 	if len(pinned) == 0 {
 		return results
@@ -767,7 +892,7 @@ func (a *App) applyBlacklistNow() (int, bool) {
 		filterRecovery = append(filterRecovery, result)
 	}
 	a.recovery = filterRecovery
-	a.updatePinnedPoolStateLocked(a.pinnedExactSetLocked())
+	a.updatePinnedPoolStateLocked(a.configuredPinnedExactSetLocked())
 	if len(removed) == 0 {
 		a.mu.Unlock()
 		return 0, false
@@ -927,7 +1052,7 @@ func (a *App) addPostPoolSpeedExemptIP(ip netip.Addr) {
 		a.cfg = cfg
 		a.scanner = scanner.New(cfg, a.logger)
 		a.mu.Unlock()
-		a.refreshPinnedPool("post_pool_speed_pass")
+		a.refreshPinnedPool(context.Background(), "post_pool_speed_pass")
 		a.logger.Info("入池后测速达标 IP 已加入免测速名单", "ip", ip.String())
 	}
 }
@@ -1454,18 +1579,22 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	evictedPinned := a.observePinnedCoolingLocked(time.Now().UTC())
 	a.pool = newPool
 	if len(evictedPinned) > 0 {
-		pinnedSet := a.pinnedExactSetLocked()
+		pinnedSet := a.configuredPinnedExactSetLocked()
 		filteredPool := a.pool[:0]
 		for _, result := range a.pool {
+			if _, evicted := evictedPinned[result.IP]; evicted {
+				delete(a.pinnedEligible, result.IP)
+				continue
+			}
 			if _, ok := pinnedSet[result.IP]; ok {
 				filteredPool = append(filteredPool, result)
-			} else if _, evicted := evictedPinned[result.IP]; !evicted {
-				filteredPool = append(filteredPool, result)
+				continue
 			}
+			filteredPool = append(filteredPool, result)
 		}
 		a.pool = filteredPool
 	}
-	a.updatePinnedPoolStateLocked(a.pinnedExactSetLocked())
+	a.updatePinnedPoolStateLocked(a.configuredPinnedExactSetLocked())
 	a.state.Targets = mergeTargetStates(a.pool, a.state.Targets)
 	a.state.Recovery = targetStatesFromResults(a.recovery, "recovering")
 	a.state.PrimaryIP = ""
@@ -1534,6 +1663,7 @@ func targetStatesFromResults(results []scanner.Result, status string) []TargetSt
 
 func (a *App) addRecoveryLocked(result scanner.Result) {
 	now := time.Now().UTC()
+	delete(a.pinnedEligible, result.IP)
 	for i, existing := range a.recovery {
 		if existing.IP == result.IP {
 			a.recovery[i] = result
@@ -1552,7 +1682,7 @@ func (a *App) addRecoveryLocked(result scanner.Result) {
 }
 
 func (a *App) observePinnedCoolingLocked(now time.Time) map[netip.Addr]struct{} {
-	pinned := a.pinnedExactSetLocked()
+	pinned := a.configuredPinnedExactSetLocked()
 	if len(pinned) == 0 {
 		a.state.PinnedPool = PinnedPoolState{Enabled: a.cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled, DynamicLimit: a.cfg.PoolSize}
 		return nil
@@ -1588,13 +1718,14 @@ func (a *App) observePinnedCoolingLocked(now time.Time) map[netip.Addr]struct{} 
 		for ip := range evicted {
 			removeSet[ip.String()] = struct{}{}
 			delete(a.state.PinnedHealth, ip.String())
+			delete(a.pinnedEligible, ip)
 			a.removeRecoveryLocked(ip)
 		}
 		a.cfg.PostPoolSpeedTest.ExemptList = removeAddrsFromList(a.cfg.PostPoolSpeedTest.ExemptList, removeSet)
 		a.state.PinnedPool.Evicted += len(evicted)
 		a.state.PinnedPool.LastEvicted = addrsMapKeys(evicted)
 	}
-	a.updatePinnedPoolStateLocked(a.pinnedExactSetLocked())
+	a.updatePinnedPoolStateLocked(a.configuredPinnedExactSetLocked())
 	return evicted
 }
 
@@ -1677,7 +1808,7 @@ func (a *App) checkRecoveryPool(ctx context.Context) healthStatus {
 	oldSyncedIPs := append([]string(nil), a.state.DNS.SyncedIPs...)
 	oldDesired := a.desiredDNSIPsLocked()
 	changed := false
-	pinnedSet := a.pinnedExactSetLocked()
+	pinnedSet := a.configuredPinnedExactSetLocked()
 	for _, candidate := range recovered {
 		poolIndex := -1
 		for i, current := range a.pool {
@@ -1997,7 +2128,11 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 		fmt.Fprintln(w, "入池后测速      : 未启用")
 	}
 	if cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled {
-		fmt.Fprintf(w, "固定免测速池    : 已启用，精确 IP 直接入池；冷却淘汰 %s，窗口 %s，占比 %.0f%%，样本 %d\n", boolLabel(cfg.PostPoolSpeedTest.ExemptRecoveryEvictEnabled), cfg.PostPoolSpeedTest.ExemptRecoveryWindow.Value(), cfg.PostPoolSpeedTest.ExemptRecoveryMaxRatio*100, cfg.PostPoolSpeedTest.ExemptRecoveryMinSamples)
+		latencyFilter := "未启用"
+		if cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled {
+			latencyFilter = fmt.Sprintf("≤ %s，%s，并发 %d", cfg.PostPoolSpeedTest.ExemptMaxLatency.Value(), cfg.PostPoolSpeedTest.ExemptProbeMode, cfg.PostPoolSpeedTest.ExemptLatencyConcurrency)
+		}
+		fmt.Fprintf(w, "固定免测速池    : 已启用，入池延迟筛选 %s；冷却淘汰 %s，窗口 %s，占比 %.0f%%，样本 %d\n", latencyFilter, boolLabel(cfg.PostPoolSpeedTest.ExemptRecoveryEvictEnabled), cfg.PostPoolSpeedTest.ExemptRecoveryWindow.Value(), cfg.PostPoolSpeedTest.ExemptRecoveryMaxRatio*100, cfg.PostPoolSpeedTest.ExemptRecoveryMinSamples)
 	} else {
 		fmt.Fprintln(w, "固定免测速池    : 未启用")
 	}

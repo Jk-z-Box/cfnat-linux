@@ -1,5 +1,5 @@
 {
-  "config_version": 21,
+  "config_version": 22,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -51,6 +51,10 @@
     "exempt_list": [],
     "force_test_list": [],
     "exempt_direct_pool_enabled": true,
+    "exempt_latency_filter_enabled": true,
+    "exempt_max_latency": "800ms",
+    "exempt_probe_mode": "tcp",
+    "exempt_latency_concurrency": 20,
     "exempt_recovery_evict_enabled": true,
     "exempt_recovery_window": "24h",
     "exempt_recovery_max_ratio": 0.6,

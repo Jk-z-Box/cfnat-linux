@@ -397,7 +397,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 21,
+  "config_version": 22,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -447,6 +447,10 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "exempt_list": [],
     "force_test_list": [],
     "exempt_direct_pool_enabled": true,
+    "exempt_latency_filter_enabled": true,
+    "exempt_max_latency": "${MAX_LATENCY}",
+    "exempt_probe_mode": "tcp",
+    "exempt_latency_concurrency": 20,
     "exempt_recovery_evict_enabled": true,
     "exempt_recovery_window": "24h",
     "exempt_recovery_max_ratio": 0.6,

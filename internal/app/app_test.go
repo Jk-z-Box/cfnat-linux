@@ -201,6 +201,7 @@ func TestPinnedExemptIPsDoNotCountTowardDynamicPoolSize(t *testing.T) {
 	cfg.PoolSize = 2
 	cfg.ValidIPCount = 3
 	cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = true
+	cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled = false
 	cfg.PostPoolSpeedTest.ExemptList = []string{"192.0.2.100", "192.0.2.101", "192.0.2.0/24"}
 	app := New(cfg, nil, nil, "v0.18.0", "")
 	app.pool = []scanner.Result{result("192.0.2.100", 10), result("192.0.2.101", 11)}
@@ -209,6 +210,24 @@ func TestPinnedExemptIPsDoNotCountTowardDynamicPoolSize(t *testing.T) {
 	app.mu.Unlock()
 	assertIPs(t, pool, "192.0.2.100", "192.0.2.101", "192.0.2.1", "192.0.2.2")
 	if app.state.PinnedPool.Total != 2 || app.state.PinnedPool.Active != 2 || app.state.PinnedPool.DynamicLimit != 2 {
+		t.Fatalf("pinned state = %+v", app.state.PinnedPool)
+	}
+}
+
+func TestPinnedExemptIPsNeedLatencyEligibilityWhenEnabled(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.PoolSize = 2
+	cfg.ValidIPCount = 3
+	cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = true
+	cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled = true
+	cfg.PostPoolSpeedTest.ExemptList = []string{"192.0.2.100", "192.0.2.101"}
+	app := New(cfg, nil, nil, "v0.18.0", "")
+	app.pinnedEligible[netip.MustParseAddr("192.0.2.100")] = result("192.0.2.100", 10)
+	app.mu.Lock()
+	pool := app.composeForwardPoolLocked([]scanner.Result{result("192.0.2.1", 20), result("192.0.2.2", 30)})
+	app.mu.Unlock()
+	assertIPs(t, pool, "192.0.2.100", "192.0.2.1", "192.0.2.2")
+	if app.state.PinnedPool.Total != 2 || app.state.PinnedPool.DynamicLimit != 2 {
 		t.Fatalf("pinned state = %+v", app.state.PinnedPool)
 	}
 }

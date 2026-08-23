@@ -66,6 +66,10 @@ type PostPoolSpeedTestConfig struct {
 	ExemptList                 []string `json:"exempt_list"`
 	ForceTestList              []string `json:"force_test_list"`
 	ExemptDirectPoolEnabled    bool     `json:"exempt_direct_pool_enabled"`
+	ExemptLatencyFilterEnabled bool     `json:"exempt_latency_filter_enabled"`
+	ExemptMaxLatency           Duration `json:"exempt_max_latency"`
+	ExemptProbeMode            string   `json:"exempt_probe_mode"`
+	ExemptLatencyConcurrency   int      `json:"exempt_latency_concurrency"`
 	ExemptRecoveryEvictEnabled bool     `json:"exempt_recovery_evict_enabled"`
 	ExemptRecoveryWindow       Duration `json:"exempt_recovery_window"`
 	ExemptRecoveryMaxRatio     float64  `json:"exempt_recovery_max_ratio"`
@@ -150,7 +154,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          21,
+		ConfigVersion:          22,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -191,7 +195,9 @@ func Defaults() Config {
 		},
 		PostPoolSpeedTest: PostPoolSpeedTestConfig{
 			Enabled: false, MinMBps: 1, Timeout: Duration(5 * time.Second), AutoBlacklist: false, ExemptList: []string{}, ForceTestList: []string{},
-			ExemptDirectPoolEnabled: true, ExemptRecoveryEvictEnabled: true, ExemptRecoveryWindow: Duration(24 * time.Hour),
+			ExemptDirectPoolEnabled: true, ExemptLatencyFilterEnabled: true, ExemptMaxLatency: Duration(800 * time.Millisecond),
+			ExemptProbeMode: "tcp", ExemptLatencyConcurrency: 20,
+			ExemptRecoveryEvictEnabled: true, ExemptRecoveryWindow: Duration(24 * time.Hour),
 			ExemptRecoveryMaxRatio: 0.6, ExemptRecoveryMinSamples: 20,
 		},
 		BlacklistSpeedTest: BlacklistSpeedTestConfig{
@@ -317,7 +323,9 @@ func Migrate(path string) (bool, error) {
 	if _, ok := raw["post_pool_speed_test"]; !ok {
 		raw["post_pool_speed_test"] = map[string]any{
 			"enabled": false, "min_mbps": 1, "timeout": "5s", "auto_blacklist": false, "exempt_list": []any{}, "force_test_list": []any{},
-			"exempt_direct_pool_enabled": true, "exempt_recovery_evict_enabled": true, "exempt_recovery_window": "24h",
+			"exempt_direct_pool_enabled": true, "exempt_latency_filter_enabled": true, "exempt_max_latency": "800ms",
+			"exempt_probe_mode": "tcp", "exempt_latency_concurrency": 20,
+			"exempt_recovery_evict_enabled": true, "exempt_recovery_window": "24h",
 			"exempt_recovery_max_ratio": 0.6, "exempt_recovery_min_samples": 20,
 		}
 		changed = true
@@ -348,6 +356,26 @@ func Migrate(path string) (bool, error) {
 		}
 		if _, ok := post["exempt_direct_pool_enabled"]; !ok {
 			post["exempt_direct_pool_enabled"] = true
+			changed = true
+		}
+		if _, ok := post["exempt_latency_filter_enabled"]; !ok {
+			post["exempt_latency_filter_enabled"] = true
+			changed = true
+		}
+		if _, ok := post["exempt_max_latency"]; !ok {
+			if value, ok := raw["max_latency"].(string); ok && strings.TrimSpace(value) != "" {
+				post["exempt_max_latency"] = value
+			} else {
+				post["exempt_max_latency"] = "800ms"
+			}
+			changed = true
+		}
+		if _, ok := post["exempt_probe_mode"]; !ok {
+			post["exempt_probe_mode"] = "tcp"
+			changed = true
+		}
+		if _, ok := post["exempt_latency_concurrency"]; !ok {
+			post["exempt_latency_concurrency"] = 20
 			changed = true
 		}
 		if _, ok := post["exempt_recovery_evict_enabled"]; !ok {
@@ -444,8 +472,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 21 {
-		raw["config_version"] = 21
+	if version, _ := raw["config_version"].(float64); int(version) < 22 {
+		raw["config_version"] = 22
 		changed = true
 	}
 	if normalizeRawExclusiveLists(raw) {
@@ -643,6 +671,26 @@ func Set(path, key, value string) error {
 			return errors.New("post_pool_speed_test.exempt_direct_pool_enabled 只能是 true 或 false")
 		}
 		cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = parsed
+	case "post_pool_speed_test_exempt_latency_filter_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_latency_filter_enabled 只能是 true 或 false")
+		}
+		cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled = parsed
+	case "post_pool_speed_test_exempt_max_latency":
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_max_latency 格式无效，请使用 300ms、1s 等格式")
+		}
+		cfg.PostPoolSpeedTest.ExemptMaxLatency = Duration(parsed)
+	case "post_pool_speed_test_exempt_probe_mode":
+		cfg.PostPoolSpeedTest.ExemptProbeMode = strings.TrimSpace(value)
+	case "post_pool_speed_test_exempt_latency_concurrency":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_latency_concurrency 必须是整数")
+		}
+		cfg.PostPoolSpeedTest.ExemptLatencyConcurrency = parsed
 	case "post_pool_speed_test_exempt_recovery_evict_enabled":
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
@@ -885,6 +933,7 @@ func (c *Config) normalizeProbeModes() {
 	c.ScanProbeMode = normalizeProbeMode(c.ScanProbeMode)
 	c.HealthProbeMode = normalizeProbeMode(c.HealthProbeMode)
 	c.RecoveryProbeMode = normalizeProbeMode(c.RecoveryProbeMode)
+	c.PostPoolSpeedTest.ExemptProbeMode = normalizeProbeMode(c.PostPoolSpeedTest.ExemptProbeMode)
 }
 
 func validateProbeModeField(name, value string) error {
@@ -953,6 +1002,9 @@ func (c *Config) Validate() error {
 	if err := validateProbeModeField("recovery_probe_mode", c.RecoveryProbeMode); err != nil {
 		return err
 	}
+	if err := validateProbeModeField("post_pool_speed_test.exempt_probe_mode", c.PostPoolSpeedTest.ExemptProbeMode); err != nil {
+		return err
+	}
 	if c.RecoverySuccesses < 1 {
 		return errors.New("recovery_successes 必须大于 0")
 	}
@@ -1006,6 +1058,12 @@ func (c *Config) Validate() error {
 	}
 	if c.PostPoolSpeedTest.ExemptRecoveryWindow.Value() <= 0 {
 		return errors.New("post_pool_speed_test.exempt_recovery_window 必须大于 0")
+	}
+	if c.PostPoolSpeedTest.ExemptMaxLatency.Value() <= 0 {
+		return errors.New("post_pool_speed_test.exempt_max_latency 必须大于 0")
+	}
+	if c.PostPoolSpeedTest.ExemptLatencyConcurrency < 1 {
+		return errors.New("post_pool_speed_test.exempt_latency_concurrency 必须大于 0")
 	}
 	if c.PostPoolSpeedTest.ExemptRecoveryMaxRatio <= 0 || c.PostPoolSpeedTest.ExemptRecoveryMaxRatio > 1 {
 		return errors.New("post_pool_speed_test.exempt_recovery_max_ratio 必须大于 0 且小于等于 1")

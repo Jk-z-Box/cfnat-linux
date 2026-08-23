@@ -158,7 +158,9 @@ Shodan IP Panel 的資料保存在：
 
 若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度、免測跳過數與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。
 
-`post_pool_speed_test.exempt_list` 是「IP 入池免測速名單」。測速達標的普通 IP 會即時加入此名單；後續入池後逐個測速會跳過它。當 `post_pool_speed_test.exempt_direct_pool_enabled=true` 時，名單中的精確 IP 還會成為固定免測速池：跳過掃描階段直接入池，掃描中不會被動態掃描結果頂出，也不計入 `valid_ip_count` 與 `pool_size`。例如 `pool_size=50`、免測精確 IP 有 60 個、新掃描合格 IP 有 60 個時，最終轉發池會是 60 個固定免測 IP 加上動態掃描前 50 個，共 110 個。CIDR 項目不會直接展開入池，只作為免測匹配規則，避免一個網段產生過大的固定池。
+`post_pool_speed_test.exempt_list` 是「IP 入池免測速名單」。測速達標的普通 IP 會即時加入此名單；後續入池後逐個測速會跳過它。當 `post_pool_speed_test.exempt_direct_pool_enabled=true` 時，名單中的精確 IP 會成為固定免測速池候選；若 `post_pool_speed_test.exempt_latency_filter_enabled=true`，程式會在啟動/重啟以及每次觸發掃描前，先用 `post_pool_speed_test.exempt_probe_mode` 與 `post_pool_speed_test.exempt_max_latency` 對「不在轉發池且不在冷卻池」的免測精確 IP 做獨立延遲篩選，達標才直接固定入池，不達標則暫時不入池但仍保留在免測名單中。這套篩選只服務固定免測速池，與普通掃描流程的 `scan_probe_mode` / `max_latency` 互不混用。
+
+固定免測速池達標入池後，掃描中不會被動態掃描結果頂出，也不計入 `valid_ip_count` 與 `pool_size`。例如 `pool_size=50`、免測精確 IP 有 60 個，其中 45 個延遲達標、新掃描合格 IP 有 60 個時，最終轉發池會是 45 個固定免測 IP 加上動態掃描前 50 個，共 95 個。CIDR 項目不會直接展開入池，只作為免測匹配規則，避免一個網段產生過大的固定池。
 
 固定免測速 IP 仍遵守健康檢查策略：不健康時會從轉發池剔除並進入冷卻恢復池；恢復健康後回到固定池。若 `post_pool_speed_test.exempt_recovery_evict_enabled=true`，程式會按 `post_pool_speed_test.exempt_recovery_window` 統計冷卻占比；當觀察樣本數達到 `post_pool_speed_test.exempt_recovery_min_samples`，且冷卻占比大於等於 `post_pool_speed_test.exempt_recovery_max_ratio` 時，該 IP 會從免測名單移除，不會進入黑名單或不免測名單。
 
@@ -263,6 +265,10 @@ DNS 同步分為兩類：
 | `post_pool_speed_test.exempt_list` | `[]` | 入池後測速免測名單；精確 IP 可固定入池，CIDR 只作為免測匹配規則 |
 | `post_pool_speed_test.force_test_list` | `[]` | 入池後不免測速名單；此名單中的 IP 每次入池後都要測速，不達標會遷移回 `ip_blacklist` |
 | `post_pool_speed_test.exempt_direct_pool_enabled` | `true` | 免測名單中的精確 IP 是否跳過掃描直接固定入池，且不計入 `valid_ip_count` / `pool_size` |
+| `post_pool_speed_test.exempt_latency_filter_enabled` | `true` | 固定免測速 IP 入池前是否先做獨立延遲篩選 |
+| `post_pool_speed_test.exempt_max_latency` | `800ms` | 固定免測速 IP 入池前的最大允許延遲；獨立於普通掃描 `max_latency` |
+| `post_pool_speed_test.exempt_probe_mode` | `tcp` | 固定免測速 IP 入池前的延遲檢測方式：`http` / `tcp` / `icmp` |
+| `post_pool_speed_test.exempt_latency_concurrency` | `20` | 固定免測速 IP 入池前延遲篩選並發數 |
 | `post_pool_speed_test.exempt_recovery_evict_enabled` | `true` | 固定免測速 IP 長期停留冷卻池時，是否自動移出免測名單 |
 | `post_pool_speed_test.exempt_recovery_window` | `24h` | 固定免測速 IP 冷卻占比統計窗口 |
 | `post_pool_speed_test.exempt_recovery_max_ratio` | `0.6` | 冷卻占比淘汰門檻，範圍 0-1 |

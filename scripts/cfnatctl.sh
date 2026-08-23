@@ -276,6 +276,51 @@ toggle_post_pool_exempt_direct_pool() {
   done
 }
 
+toggle_post_pool_exempt_latency_filter() {
+  local value
+  while true; do
+    read -r -p "免测速名单精确 IP 入池前是否先做延迟筛选？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config post_pool_speed_test_exempt_latency_filter_enabled true && return ;;
+      n|N|no|NO|No) set_config post_pool_speed_test_exempt_latency_filter_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+edit_post_pool_exempt_max_latency() {
+  local value
+  while true; do
+    read -r -p "免测速名单入池最大延迟，单位 ms（例如 300）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 10000 )); then
+      if set_config post_pool_speed_test_exempt_max_latency "${value}ms"; then return; fi
+    fi
+    echo "请输入 1-10000 的整数。" >&2
+  done
+}
+
+edit_post_pool_exempt_probe_mode() {
+  local value
+  while true; do
+    read -r -p "免测速名单入池延迟检测方式 [http/tcp/icmp]: " value
+    case "${value}" in
+      http|https|tcp|tcping|icmp|ping) set_config post_pool_speed_test_exempt_probe_mode "${value}" && return ;;
+      *) echo "请输入 http、tcp 或 icmp。" >&2 ;;
+    esac
+  done
+}
+
+edit_post_pool_exempt_latency_concurrency() {
+  local value
+  while true; do
+    read -r -p "免测速名单延迟筛选并发数（例如 20）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 1000 )); then
+      if set_config post_pool_speed_test_exempt_latency_concurrency "${value}"; then return; fi
+    fi
+    echo "请输入 1-1000 的整数。" >&2
+  done
+}
+
 toggle_post_pool_exempt_recovery_evict() {
   local value
   while true; do
@@ -637,6 +682,10 @@ config_menu() {
     echo " 31) Web 用户名和密码"
     echo " 32) Shodan IP Panel 开关"
     echo " 33) 使用编辑器修改完整配置"
+    echo " 34) 免测速名单入池延迟筛选开关"
+    echo " 35) 免测速名单入池最大延迟"
+    echo " 36) 免测速名单入池延迟检测方式"
+    echo " 37) 免测速名单延迟筛选并发数"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -686,6 +735,10 @@ config_menu() {
         fi
         pause_screen
         ;;
+      34) toggle_post_pool_exempt_latency_filter; pause_screen ;;
+      35) edit_post_pool_exempt_max_latency; pause_screen ;;
+      36) edit_post_pool_exempt_probe_mode; pause_screen ;;
+      37) edit_post_pool_exempt_latency_concurrency; pause_screen ;;
       0) return ;;
       *) echo "无效选项，请重新输入。" ;;
     esac

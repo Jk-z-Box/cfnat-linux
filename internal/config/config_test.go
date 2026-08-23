@@ -283,11 +283,23 @@ func TestPostPoolSpeedTestSetAndValidation(t *testing.T) {
 	if err := Set(path, "post_pool_speed_test_force_test_list", "203.0.113.1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := Set(path, "post_pool_speed_test_exempt_latency_filter_enabled", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "post_pool_speed_test_exempt_max_latency", "300ms"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "post_pool_speed_test_exempt_probe_mode", "tcping"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "post_pool_speed_test_exempt_latency_concurrency", "8"); err != nil {
+		t.Fatal(err)
+	}
 	got, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist || len(got.PostPoolSpeedTest.ExemptList) != 2 || len(got.PostPoolSpeedTest.ForceTestList) != 1 || !got.PostPoolSpeedTest.ExemptDirectPoolEnabled || !got.PostPoolSpeedTest.ExemptRecoveryEvictEnabled {
+	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist || len(got.PostPoolSpeedTest.ExemptList) != 2 || len(got.PostPoolSpeedTest.ForceTestList) != 1 || !got.PostPoolSpeedTest.ExemptDirectPoolEnabled || !got.PostPoolSpeedTest.ExemptLatencyFilterEnabled || got.PostPoolSpeedTest.ExemptMaxLatency.Value() != 300*time.Millisecond || got.PostPoolSpeedTest.ExemptProbeMode != "tcp" || got.PostPoolSpeedTest.ExemptLatencyConcurrency != 8 || !got.PostPoolSpeedTest.ExemptRecoveryEvictEnabled {
 		t.Fatalf("post pool speed config = %+v", got.PostPoolSpeedTest)
 	}
 	if err := Set(path, "post_pool_speed_test_min_mbps", "0"); err == nil {
@@ -346,7 +358,7 @@ func TestMigrateBlacklistSpeedIntervalToHours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConfigVersion != 21 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
+	if got.ConfigVersion != 22 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
 		t.Fatalf("version=%d blacklist interval=%s", got.ConfigVersion, got.BlacklistSpeedTest.Interval.Value())
 	}
 }
