@@ -48,6 +48,37 @@ func TestPrintStatusIncludesOperationalDetails(t *testing.T) {
 	}
 }
 
+func TestPrintStatusHidesSyntheticLatency(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.StateFile = filepath.Join(t.TempDir(), "state.json")
+	now := time.Now().UTC()
+	state := RuntimeState{
+		Status:     "running",
+		Listen:     cfg.Listen,
+		MaxLatency: cfg.MaxLatency.Value().String(),
+		Scan:       ScanState{Completed: true, CompletedAt: &now},
+		Targets: []TargetState{
+			{IP: netip.MustParseAddr("192.0.2.1"), LatencyMS: 1 << 62, Status: "checking", CheckedAt: now},
+		},
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeState(cfg.StateFile, data); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	PrintStatus(&output, cfg)
+	text := output.String()
+	if strings.Contains(text, "4611686018427387904") {
+		t.Fatalf("status leaked synthetic latency:\n%s", text)
+	}
+	if !strings.Contains(text, "检测中") || !strings.Contains(text, " - ") {
+		t.Fatalf("status did not render checking placeholder:\n%s", text)
+	}
+}
+
 func TestPanelTemplateParses(t *testing.T) {
 	if _, err := template.New("panel").Funcs(template.FuncMap{"join": strings.Join}).Parse(panelHTML); err != nil {
 		t.Fatal(err)
@@ -242,6 +273,20 @@ func TestFilterPinnedResultsExcludesDirectPoolIPsFromScanResults(t *testing.T) {
 		result("192.0.2.100", 90),
 	})
 	assertIPs(t, filtered, "192.0.2.1")
+}
+
+func TestTargetStatesSanitizeSyntheticLatency(t *testing.T) {
+	targets := targetStatesFromResults([]scanner.Result{result("192.0.2.1", 1<<62)}, "healthy")
+	if len(targets) != 1 {
+		t.Fatalf("targets = %#v", targets)
+	}
+	if targets[0].LatencyMS != 0 || targets[0].Status != "checking" {
+		t.Fatalf("target = %+v", targets[0])
+	}
+	merged := mergeTargetStates([]scanner.Result{result("192.0.2.2", 1<<62)}, []TargetState{{IP: netip.MustParseAddr("192.0.2.2"), LatencyMS: 88, Status: "healthy"}})
+	if merged[0].LatencyMS != 0 || merged[0].Status != "checking" {
+		t.Fatalf("merged target = %+v", merged[0])
+	}
 }
 
 func TestApplyBlacklistNowPrunesPoolAndRecovery(t *testing.T) {

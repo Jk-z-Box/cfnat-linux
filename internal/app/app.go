@@ -24,6 +24,8 @@ import (
 
 var errScanInProgress = errors.New("scan already in progress")
 
+const syntheticLatencyThresholdMS int64 = 1 << 60
+
 type ScanState struct {
 	InProgress  bool       `json:"in_progress"`
 	Completed   bool       `json:"completed"`
@@ -1669,8 +1671,18 @@ func mergeTargetStates(results []scanner.Result, existing []TargetState) []Targe
 	}
 	targets := make([]TargetState, 0, len(results))
 	for _, result := range results {
-		target := TargetState{IP: result.IP, LatencyMS: result.LatencyMS, SpeedMBps: result.SpeedMBps, Colo: result.Colo, Status: "healthy", CheckedAt: result.CheckedAt}
+		target := targetStateFromResult(result, "healthy")
 		if old, ok := byIP[result.IP]; ok {
+			if isSyntheticLatency(result.LatencyMS) {
+				target.Status = valueOr(old.Status, target.Status)
+				target.LastError = old.LastError
+				target.CheckedAt = old.CheckedAt
+				if target.Status == "healthy" {
+					target.Status = "checking"
+				}
+				targets = append(targets, target)
+				continue
+			}
 			target.Status = old.Status
 			target.LastError = old.LastError
 			target.CheckedAt = old.CheckedAt
@@ -1689,9 +1701,25 @@ func mergeTargetStates(results []scanner.Result, existing []TargetState) []Targe
 func targetStatesFromResults(results []scanner.Result, status string) []TargetState {
 	targets := make([]TargetState, 0, len(results))
 	for _, result := range results {
-		targets = append(targets, TargetState{IP: result.IP, LatencyMS: result.LatencyMS, SpeedMBps: result.SpeedMBps, Colo: result.Colo, Status: status, CheckedAt: result.CheckedAt})
+		targets = append(targets, targetStateFromResult(result, status))
 	}
 	return targets
+}
+
+func targetStateFromResult(result scanner.Result, status string) TargetState {
+	target := TargetState{IP: result.IP, LatencyMS: result.LatencyMS, SpeedMBps: result.SpeedMBps, Colo: result.Colo, Status: status, CheckedAt: result.CheckedAt}
+	if isSyntheticLatency(target.LatencyMS) {
+		target.LatencyMS = 0
+		target.SpeedMBps = result.SpeedMBps
+		if target.Status == "healthy" {
+			target.Status = "checking"
+		}
+	}
+	return target
+}
+
+func isSyntheticLatency(latencyMS int64) bool {
+	return latencyMS >= syntheticLatencyThresholdMS
 }
 
 func (a *App) addRecoveryLocked(result scanner.Result) {
@@ -2280,7 +2308,7 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 	} else {
 		fmt.Fprintln(w, "优选 IP 状态    :")
 		for i, target := range state.Targets {
-			fmt.Fprintf(w, "  %2d. %-39s %4dms %8s %-8s %s\n", i+1, target.IP, target.LatencyMS, speedText(target.SpeedMBps), valueOr(target.Colo, "-"), statusText(target.Status))
+			fmt.Fprintf(w, "  %2d. %-39s %6s %8s %-8s %s\n", i+1, target.IP, latencyText(target.LatencyMS), speedText(target.SpeedMBps), valueOr(target.Colo, "-"), statusText(target.Status))
 		}
 	}
 	if !cfg.DNS.Enabled {
@@ -2325,7 +2353,7 @@ func postPoolSpeedStatusText(speed PostPoolSpeedState) string {
 }
 
 func statusText(value string) string {
-	text := map[string]string{"starting": "启动中", "scanning": "扫描中", "running": "运行中", "degraded": "降级运行", "error": "错误", "stopped": "已停止", "healthy": "健康", "unhealthy": "异常"}[value]
+	text := map[string]string{"starting": "启动中", "scanning": "扫描中", "running": "运行中", "degraded": "降级运行", "error": "错误", "stopped": "已停止", "healthy": "健康", "unhealthy": "异常", "checking": "检测中", "recovering": "恢复中"}[value]
 	return valueOr(text, valueOr(value, "未知"))
 }
 
@@ -2341,6 +2369,13 @@ func speedText(value float64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.2fMB/s", value)
+}
+
+func latencyText(value int64) string {
+	if value <= 0 || isSyntheticLatency(value) {
+		return "-"
+	}
+	return fmt.Sprintf("%dms", value)
 }
 
 func join(values []string) string {
