@@ -85,8 +85,8 @@ func (s *Scanner) ScanProgress(ctx context.Context, onProgress ProgressFunc) ([]
 		return nil, fmt.Errorf("没有可建立 TCP 连接的候选 IP（失败统计: %s）", formatCounts(tcpFailures))
 	}
 	batchSize := s.scanBatchSize(len(ranked))
-	httpConcurrency := min(s.cfg.Concurrency, 20)
-	s.logger.Info("TCP 初筛完成", "reachable", len(ranked), "batch_size", batchSize, "http_concurrency", httpConcurrency, "failures", tcpFailures)
+	probeConcurrency := min(s.cfg.ScanProbeConcurrency, len(ranked))
+	s.logger.Info("TCP 初筛完成", "reachable", len(ranked), "batch_size", batchSize, "scan_probe_concurrency", probeConcurrency, "failures", tcpFailures)
 
 	valid := make([]Result, 0, s.cfg.ValidIPCount)
 	seenValid := make(map[netip.Addr]struct{}, s.cfg.ValidIPCount)
@@ -169,8 +169,7 @@ func (s *Scanner) probeCandidates(ctx context.Context, candidates []netip.Addr, 
 	results := make(chan Result, max(s.cfg.Concurrency, s.cfg.ValidIPCount))
 	failures := make(chan string, len(candidates))
 	var wg sync.WaitGroup
-	httpConcurrency := min(s.cfg.Concurrency, 20)
-	workers := min(httpConcurrency, len(candidates))
+	workers := min(s.cfg.ScanProbeConcurrency, len(candidates))
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {

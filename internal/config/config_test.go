@@ -64,6 +64,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.SpeedTest.Concurrency != 3 {
 		t.Fatalf("speed concurrency = %d", cfg.SpeedTest.Concurrency)
 	}
+	if cfg.ScanProbeConcurrency != 20 || cfg.HealthConcurrency != 20 || cfg.RecoveryConcurrency != 10 {
+		t.Fatalf("probe concurrency = scan:%d health:%d recovery:%d", cfg.ScanProbeConcurrency, cfg.HealthConcurrency, cfg.RecoveryConcurrency)
+	}
 	if cfg.PostPoolSpeedTest.Enabled {
 		t.Fatal("expected post-pool speed test to be disabled after migration")
 	}
@@ -240,6 +243,34 @@ func TestProbeModeAliasesAndValidation(t *testing.T) {
 	}
 }
 
+func TestProbeConcurrencySetAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := Defaults()
+	data, _ := json.Marshal(cfg)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "scan_probe_concurrency", "33"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "health_concurrency", "44"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "recovery_concurrency", "11"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ScanProbeConcurrency != 33 || got.HealthConcurrency != 44 || got.RecoveryConcurrency != 11 {
+		t.Fatalf("probe concurrency = scan:%d health:%d recovery:%d", got.ScanProbeConcurrency, got.HealthConcurrency, got.RecoveryConcurrency)
+	}
+	if err := Set(path, "health_concurrency", "0"); err == nil {
+		t.Fatal("expected invalid health concurrency")
+	}
+}
+
 func TestRejectInvalidSpeedTestThreshold(t *testing.T) {
 	cfg := Defaults()
 	cfg.SpeedTest.Enabled = true
@@ -358,7 +389,7 @@ func TestMigrateBlacklistSpeedIntervalToHours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConfigVersion != 22 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
+	if got.ConfigVersion != 23 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
 		t.Fatalf("version=%d blacklist interval=%s", got.ConfigVersion, got.BlacklistSpeedTest.Interval.Value())
 	}
 }

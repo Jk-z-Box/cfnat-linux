@@ -321,6 +321,39 @@ edit_post_pool_exempt_latency_concurrency() {
   done
 }
 
+edit_scan_probe_concurrency() {
+  local value
+  while true; do
+    read -r -p "普通扫描复筛并发数（例如 20）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 1000 )); then
+      if set_config scan_probe_concurrency "${value}"; then return; fi
+    fi
+    echo "请输入 1-1000 的整数。" >&2
+  done
+}
+
+edit_health_concurrency() {
+  local value
+  while true; do
+    read -r -p "健康检查/延迟排序并发数（例如 20）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 1000 )); then
+      if set_config health_concurrency "${value}"; then return; fi
+    fi
+    echo "请输入 1-1000 的整数。" >&2
+  done
+}
+
+edit_recovery_concurrency() {
+  local value
+  while true; do
+    read -r -p "冷却恢复池检查并发数（例如 10）: " value
+    if [[ "${value}" =~ ^[1-9][0-9]*$ ]] && (( value <= 1000 )); then
+      if set_config recovery_concurrency "${value}"; then return; fi
+    fi
+    echo "请输入 1-1000 的整数。" >&2
+  done
+}
+
 toggle_post_pool_exempt_recovery_evict() {
   local value
   while true; do
@@ -686,6 +719,9 @@ config_menu() {
     echo " 35) 免测速名单入池最大延迟"
     echo " 36) 免测速名单入池延迟检测方式"
     echo " 37) 免测速名单延迟筛选并发数"
+    echo " 38) 普通扫描复筛并发数"
+    echo " 39) 健康检查/延迟排序并发数"
+    echo " 40) 冷却恢复池检查并发数"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -739,6 +775,9 @@ config_menu() {
       35) edit_post_pool_exempt_max_latency; pause_screen ;;
       36) edit_post_pool_exempt_probe_mode; pause_screen ;;
       37) edit_post_pool_exempt_latency_concurrency; pause_screen ;;
+      38) edit_scan_probe_concurrency; pause_screen ;;
+      39) edit_health_concurrency; pause_screen ;;
+      40) edit_recovery_concurrency; pause_screen ;;
       0) return ;;
       *) echo "无效选项，请重新输入。" ;;
     esac

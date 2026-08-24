@@ -1506,8 +1506,41 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	allHealthy := true
 	removed := make(map[netip.Addr]struct{})
 	checkedByIP := make(map[netip.Addr]scanner.Result, len(pool))
-	for _, result := range pool {
-		checked, err := a.scanner.ProbeWithMode(checkCtx, result.IP, a.cfg.HealthProbeMode)
+	type probeItem struct {
+		base    scanner.Result
+		checked scanner.Result
+		err     error
+	}
+	jobs := make(chan scanner.Result)
+	probeResults := make(chan probeItem, len(pool))
+	workers := min(a.cfg.HealthConcurrency, len(pool))
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for result := range jobs {
+				checked, err := a.scanner.ProbeWithMode(checkCtx, result.IP, a.cfg.HealthProbeMode)
+				probeResults <- probeItem{base: result, checked: checked, err: err}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, result := range pool {
+			select {
+			case <-checkCtx.Done():
+				return
+			case jobs <- result:
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(probeResults)
+	}()
+	for item := range probeResults {
+		result := item.base
 		a.mu.Lock()
 		targetIndex := -1
 		for i := range a.state.Targets {
@@ -1516,24 +1549,24 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 				break
 			}
 		}
-		if err != nil {
+		if item.err != nil {
 			a.failures[result.IP]++
 			allHealthy = false
 			if targetIndex >= 0 {
 				a.state.Targets[targetIndex].CheckedAt = time.Now().UTC()
 				a.state.Targets[targetIndex].Status = "unhealthy"
-				a.state.Targets[targetIndex].LastError = err.Error()
+				a.state.Targets[targetIndex].LastError = item.err.Error()
 			}
 			if a.failures[result.IP] >= a.cfg.HealthFailures {
 				removed[result.IP] = struct{}{}
 			}
 		} else {
 			a.failures[result.IP] = 0
-			checkedByIP[result.IP] = checked
+			checkedByIP[result.IP] = item.checked
 			if targetIndex >= 0 {
 				a.state.Targets[targetIndex].Status = "healthy"
-				a.state.Targets[targetIndex].LatencyMS = checked.LatencyMS
-				a.state.Targets[targetIndex].CheckedAt = checked.CheckedAt
+				a.state.Targets[targetIndex].LatencyMS = item.checked.LatencyMS
+				a.state.Targets[targetIndex].CheckedAt = item.checked.CheckedAt
 				a.state.Targets[targetIndex].LastError = ""
 			}
 		}
@@ -1769,26 +1802,64 @@ func (a *App) checkRecoveryPool(ctx context.Context) healthStatus {
 	now := time.Now().UTC()
 	checkCtx, cancel := context.WithTimeout(ctx, a.cfg.DialTimeout.Value()*time.Duration(len(recovery)+1))
 	defer cancel()
-	recovered := make([]scanner.Result, 0, len(recovery))
+	candidates := make([]scanner.Result, 0, len(recovery))
 	for _, result := range recovery {
 		if at, ok := recoveryAt[result.IP]; ok && now.Sub(at) < a.cfg.RecoveryCooldown.Value() {
 			continue
 		}
-		checked, err := a.scanner.ProbeWithMode(checkCtx, result.IP, a.cfg.RecoveryProbeMode)
-		if err != nil {
+		candidates = append(candidates, result)
+	}
+	recovered := make([]scanner.Result, 0, len(candidates))
+	if len(candidates) > 0 {
+		type recoveryProbeItem struct {
+			base    scanner.Result
+			checked scanner.Result
+			err     error
+		}
+		jobs := make(chan scanner.Result)
+		probeResults := make(chan recoveryProbeItem, len(candidates))
+		workers := min(a.cfg.RecoveryConcurrency, len(candidates))
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for result := range jobs {
+					checked, err := a.scanner.ProbeWithMode(checkCtx, result.IP, a.cfg.RecoveryProbeMode)
+					probeResults <- recoveryProbeItem{base: result, checked: checked, err: err}
+				}
+			}()
+		}
+		go func() {
+			defer close(jobs)
+			for _, result := range candidates {
+				select {
+				case <-checkCtx.Done():
+					return
+				case jobs <- result:
+				}
+			}
+		}()
+		go func() {
+			wg.Wait()
+			close(probeResults)
+		}()
+		for item := range probeResults {
+			if item.err != nil {
+				a.mu.Lock()
+				a.recoveryOK[item.base.IP] = 0
+				a.mu.Unlock()
+				continue
+			}
+			successes := recoveryOK[item.base.IP] + 1
 			a.mu.Lock()
-			a.recoveryOK[result.IP] = 0
+			a.recoveryOK[item.base.IP] = successes
 			a.mu.Unlock()
-			continue
+			if successes < a.cfg.RecoverySuccesses {
+				continue
+			}
+			recovered = append(recovered, item.checked)
 		}
-		successes := recoveryOK[result.IP] + 1
-		a.mu.Lock()
-		a.recoveryOK[result.IP] = successes
-		a.mu.Unlock()
-		if successes < a.cfg.RecoverySuccesses {
-			continue
-		}
-		recovered = append(recovered, checked)
 	}
 	if len(recovered) == 0 {
 		a.mu.Lock()
@@ -2111,6 +2182,7 @@ func ReadState(path string) (RuntimeState, error) {
 func PrintStatus(w io.Writer, cfg config.Config) {
 	fmt.Fprintf(w, "监听地址        : %s\n", cfg.Listen)
 	fmt.Fprintf(w, "延迟上限        : %s（超过该值不优选）\n", cfg.MaxLatency.Value())
+	fmt.Fprintf(w, "探测并发        : TCP 初筛 %d，扫描复筛 %d，健康检查 %d，冷却恢复 %d\n", cfg.Concurrency, cfg.ScanProbeConcurrency, cfg.HealthConcurrency, cfg.RecoveryConcurrency)
 	if cfg.ScanIntervalEnabled {
 		fmt.Fprintf(w, "定时重选        : 已启用，每 %s\n", cfg.ScanInterval.Value())
 	} else {

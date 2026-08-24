@@ -119,6 +119,9 @@ type Config struct {
 	PoolSize               int                      `json:"pool_size"`
 	MinHealthyCount        int                      `json:"min_healthy_count"`
 	Concurrency            int                      `json:"concurrency"`
+	ScanProbeConcurrency   int                      `json:"scan_probe_concurrency"`
+	HealthConcurrency      int                      `json:"health_concurrency"`
+	RecoveryConcurrency    int                      `json:"recovery_concurrency"`
 	TargetPort             int                      `json:"target_port"`
 	TLS                    bool                     `json:"tls"`
 	TLSServerName          string                   `json:"tls_server_name"`
@@ -154,7 +157,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          22,
+		ConfigVersion:          23,
 		Listen:                 "0.0.0.0:1234",
 		IPVersion:              4,
 		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
@@ -165,6 +168,9 @@ func Defaults() Config {
 		PoolSize:               10,
 		MinHealthyCount:        5,
 		Concurrency:            100,
+		ScanProbeConcurrency:   20,
+		HealthConcurrency:      20,
+		RecoveryConcurrency:    10,
 		TargetPort:             443,
 		TLS:                    true,
 		CheckURL:               "https://cloudflare.com/cdn-cgi/trace",
@@ -292,6 +298,18 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["recovery_successes"]; !ok {
 		raw["recovery_successes"] = 2
+		changed = true
+	}
+	if _, ok := raw["scan_probe_concurrency"]; !ok {
+		raw["scan_probe_concurrency"] = 20
+		changed = true
+	}
+	if _, ok := raw["health_concurrency"]; !ok {
+		raw["health_concurrency"] = 20
+		changed = true
+	}
+	if _, ok := raw["recovery_concurrency"]; !ok {
+		raw["recovery_concurrency"] = 10
 		changed = true
 	}
 	if dns, ok := raw["cloudflare_dns"].(map[string]any); ok {
@@ -472,8 +490,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 22 {
-		raw["config_version"] = 22
+	if version, _ := raw["config_version"].(float64); int(version) < 23 {
+		raw["config_version"] = 23
 		changed = true
 	}
 	if normalizeRawExclusiveLists(raw) {
@@ -531,10 +549,28 @@ func Set(path, key, value string) error {
 		cfg.RecoveryProbeMode = strings.TrimSpace(value)
 	case "scan_probe_mode":
 		cfg.ScanProbeMode = strings.TrimSpace(value)
+	case "scan_probe_concurrency":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("scan_probe_concurrency 必须是整数")
+		}
+		cfg.ScanProbeConcurrency = parsed
 	case "health_probe_mode":
 		cfg.HealthProbeMode = strings.TrimSpace(value)
+	case "health_concurrency":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("health_concurrency 必须是整数")
+		}
+		cfg.HealthConcurrency = parsed
 	case "recovery_probe_mode":
 		cfg.RecoveryProbeMode = strings.TrimSpace(value)
+	case "recovery_concurrency":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("recovery_concurrency 必须是整数")
+		}
+		cfg.RecoveryConcurrency = parsed
 	case "min_healthy_count":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
@@ -978,8 +1014,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("post_pool_speed_test.force_test_list 包含无效 IP 或 CIDR: %q", item)
 		}
 	}
-	if c.MaxCandidates < 1 || c.Concurrency < 1 || c.ValidIPCount < 1 || c.PoolSize < 1 || c.MinHealthyCount < 1 {
-		return errors.New("候选数、并发数、有效 IP 数、池大小和最小健康 IP 数必须大于 0")
+	if c.MaxCandidates < 1 || c.Concurrency < 1 || c.ScanProbeConcurrency < 1 || c.HealthConcurrency < 1 || c.RecoveryConcurrency < 1 || c.ValidIPCount < 1 || c.PoolSize < 1 || c.MinHealthyCount < 1 {
+		return errors.New("候选数、并发数、复筛并发、健康检查并发、冷却恢复并发、有效 IP 数、池大小和最小健康 IP 数必须大于 0")
 	}
 	if c.PoolSize > c.ValidIPCount {
 		return errors.New("pool_size 不能大于 valid_ip_count")

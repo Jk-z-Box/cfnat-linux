@@ -231,7 +231,10 @@ DNS 同步分為兩類：
 | `ip_sources` | Cloudflare 官方清單 | CIDR 檔案或 URL，可設定多個 |
 | `ip_blacklist` | `[]` | 不允許進入 TCP 初篩與轉發池的 IP 或 CIDR；Web 保存後會即時從轉發池和冷卻恢復池剔除 |
 | `max_candidates` | `2000` | 單輪最多探測的候選數 |
-| `concurrency` | `100` | TCP 初篩併發數；完整探測複篩自動限制為最多 20 |
+| `concurrency` | `100` | TCP 初篩併發數 |
+| `scan_probe_concurrency` | `20` | 普通掃描復篩併發數；控制 TCP 初篩/測速後的延遲或 HTTP/TLS 探測併發 |
+| `health_concurrency` | `20` | 轉發池健康檢查與延遲排序監控併發數 |
+| `recovery_concurrency` | `10` | 冷卻恢復池健康恢復檢查併發數 |
 | `valid_ip_count` | `20` | 保留的有效 IP 數 |
 | `pool_size` | `10` | TCP 轉發目標池大小 |
 | `min_healthy_count` | `5` | 健康 IP 少於此數量時觸發故障重選；新池更快則整池替換，新池較慢則保留舊健康 IP 並補齊到 `pool_size` |

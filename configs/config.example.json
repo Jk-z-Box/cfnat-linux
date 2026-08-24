@@ -1,5 +1,5 @@
 {
-  "config_version": 22,
+  "config_version": 23,
   "listen": "0.0.0.0:1234",
   "ip_version": 4,
   "ip_sources": [
@@ -12,6 +12,9 @@
   "pool_size": 10,
   "min_healthy_count": 5,
   "concurrency": 100,
+  "scan_probe_concurrency": 20,
+  "health_concurrency": 20,
+  "recovery_concurrency": 10,
   "target_port": 443,
   "tls": true,
   "tls_server_name": "",
