@@ -1,7 +1,7 @@
 #!/bin/sh
 if [ -z "${BASH_VERSION:-}" ]; then
   if [ -f /etc/openwrt_release ] && ! command -v bash >/dev/null 2>&1; then
-    opkg update
+    opkg update || true
     opkg install bash
   fi
   exec bash "$0" "$@"
@@ -312,10 +312,16 @@ prompt_dns_settings() {
 if [[ -f /etc/openwrt_release ]]; then
   INIT_SYSTEM="openwrt"
   info "检测到 OpenWrt，使用 procd 服务管理"
-  opkg update
+  OPENWRT_MISSING_DEPS=()
   for pkg in bash ca-bundle ca-certificates curl tar coreutils-sha256sum coreutils-install coreutils-nohup grep sed gawk; do
-    opkg list-installed "$pkg" >/dev/null 2>&1 || opkg install "$pkg" || true
+    opkg list-installed "$pkg" >/dev/null 2>&1 || OPENWRT_MISSING_DEPS+=("$pkg")
   done
+  if (( ${#OPENWRT_MISSING_DEPS[@]} > 0 )); then
+    opkg update || warn "opkg update 未完全成功，将继续尝试安装缺失依赖: ${OPENWRT_MISSING_DEPS[*]}"
+    for pkg in "${OPENWRT_MISSING_DEPS[@]}"; do
+      opkg list-installed "$pkg" >/dev/null 2>&1 || opkg install "$pkg" || true
+    done
+  fi
   command -v install >/dev/null 2>&1 || opkg install coreutils-install
   command -v sha256sum >/dev/null 2>&1 || opkg install coreutils-sha256sum
 elif command -v systemctl >/dev/null 2>&1; then
