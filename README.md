@@ -233,7 +233,9 @@ DNS 同步分為兩類：
 | `max_candidates` | `2000` | 單輪最多探測的候選數 |
 | `concurrency` | `100` | TCP 初篩併發數 |
 | `scan_probe_concurrency` | `20` | 普通掃描復篩併發數；控制 TCP 初篩/測速後的延遲或 HTTP/TLS 探測併發 |
+| `health_concurrency_enabled` | `true` | 是否啟用轉發池健康檢查/延遲排序併發；關閉後串行檢查 |
 | `health_concurrency` | `20` | 轉發池健康檢查與延遲排序監控併發數 |
+| `recovery_concurrency_enabled` | `true` | 是否啟用冷卻恢復池檢查併發；關閉後串行檢查 |
 | `recovery_concurrency` | `10` | 冷卻恢復池健康恢復檢查併發數 |
 | `valid_ip_count` | `20` | 保留的有效 IP 數 |
 | `pool_size` | `10` | TCP 轉發目標池大小 |

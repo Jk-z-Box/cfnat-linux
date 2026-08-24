@@ -403,7 +403,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 23,
+  "config_version": 24,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -415,7 +415,9 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "min_healthy_count": ${MIN_HEALTHY_COUNT},
   "concurrency": 100,
   "scan_probe_concurrency": 20,
+  "health_concurrency_enabled": true,
   "health_concurrency": 20,
+  "recovery_concurrency_enabled": true,
   "recovery_concurrency": 10,
   "target_port": 443,
   "tls": true,

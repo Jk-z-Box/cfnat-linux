@@ -108,89 +108,93 @@ type ShodanConfig struct {
 }
 
 type Config struct {
-	ConfigVersion          int                      `json:"config_version"`
-	Listen                 string                   `json:"listen"`
-	IPVersion              int                      `json:"ip_version"`
-	IPSources              []string                 `json:"ip_sources"`
-	IPBlacklist            []string                 `json:"ip_blacklist"`
-	RandomIPs              bool                     `json:"random_ips"`
-	MaxCandidates          int                      `json:"max_candidates"`
-	ValidIPCount           int                      `json:"valid_ip_count"`
-	PoolSize               int                      `json:"pool_size"`
-	MinHealthyCount        int                      `json:"min_healthy_count"`
-	Concurrency            int                      `json:"concurrency"`
-	ScanProbeConcurrency   int                      `json:"scan_probe_concurrency"`
-	HealthConcurrency      int                      `json:"health_concurrency"`
-	RecoveryConcurrency    int                      `json:"recovery_concurrency"`
-	TargetPort             int                      `json:"target_port"`
-	TLS                    bool                     `json:"tls"`
-	TLSServerName          string                   `json:"tls_server_name"`
-	InsecureSkipVerify     bool                     `json:"insecure_skip_verify"`
-	CheckURL               string                   `json:"check_url"`
-	ExpectedStatus         int                      `json:"expected_status"`
-	ProbeMode              string                   `json:"probe_mode"`
-	ScanProbeMode          string                   `json:"scan_probe_mode"`
-	HealthProbeMode        string                   `json:"health_probe_mode"`
-	RecoveryProbeMode      string                   `json:"recovery_probe_mode"`
-	MaxLatency             Duration                 `json:"max_latency"`
-	DialTimeout            Duration                 `json:"dial_timeout"`
-	Colos                  []string                 `json:"colos"`
-	ScanIntervalEnabled    bool                     `json:"scan_interval_enabled"`
-	ScanInterval           Duration                 `json:"scan_interval"`
-	LatencyMonitorInterval Duration                 `json:"latency_monitor_interval"`
-	HealthInterval         Duration                 `json:"health_interval"`
-	HealthFailures         int                      `json:"health_failures"`
-	RecoveryCooldown       Duration                 `json:"recovery_cooldown"`
-	RecoverySuccesses      int                      `json:"recovery_successes"`
-	StateFile              string                   `json:"state_file"`
-	SourceCacheDir         string                   `json:"source_cache_dir"`
-	LogLevel               string                   `json:"log_level"`
-	DNS                    DNSConfig                `json:"cloudflare_dns"`
-	SpeedTest              SpeedTestConfig          `json:"speed_test"`
-	PostPoolSpeedTest      PostPoolSpeedTestConfig  `json:"post_pool_speed_test"`
-	BlacklistSpeedTest     BlacklistSpeedTestConfig `json:"blacklist_speed_test"`
-	Management             ManagementConfig         `json:"management"`
-	Update                 UpdateConfig             `json:"update"`
-	Web                    WebConfig                `json:"web"`
-	Shodan                 ShodanConfig             `json:"shodan"`
+	ConfigVersion              int                      `json:"config_version"`
+	Listen                     string                   `json:"listen"`
+	IPVersion                  int                      `json:"ip_version"`
+	IPSources                  []string                 `json:"ip_sources"`
+	IPBlacklist                []string                 `json:"ip_blacklist"`
+	RandomIPs                  bool                     `json:"random_ips"`
+	MaxCandidates              int                      `json:"max_candidates"`
+	ValidIPCount               int                      `json:"valid_ip_count"`
+	PoolSize                   int                      `json:"pool_size"`
+	MinHealthyCount            int                      `json:"min_healthy_count"`
+	Concurrency                int                      `json:"concurrency"`
+	ScanProbeConcurrency       int                      `json:"scan_probe_concurrency"`
+	HealthConcurrencyEnabled   bool                     `json:"health_concurrency_enabled"`
+	HealthConcurrency          int                      `json:"health_concurrency"`
+	RecoveryConcurrencyEnabled bool                     `json:"recovery_concurrency_enabled"`
+	RecoveryConcurrency        int                      `json:"recovery_concurrency"`
+	TargetPort                 int                      `json:"target_port"`
+	TLS                        bool                     `json:"tls"`
+	TLSServerName              string                   `json:"tls_server_name"`
+	InsecureSkipVerify         bool                     `json:"insecure_skip_verify"`
+	CheckURL                   string                   `json:"check_url"`
+	ExpectedStatus             int                      `json:"expected_status"`
+	ProbeMode                  string                   `json:"probe_mode"`
+	ScanProbeMode              string                   `json:"scan_probe_mode"`
+	HealthProbeMode            string                   `json:"health_probe_mode"`
+	RecoveryProbeMode          string                   `json:"recovery_probe_mode"`
+	MaxLatency                 Duration                 `json:"max_latency"`
+	DialTimeout                Duration                 `json:"dial_timeout"`
+	Colos                      []string                 `json:"colos"`
+	ScanIntervalEnabled        bool                     `json:"scan_interval_enabled"`
+	ScanInterval               Duration                 `json:"scan_interval"`
+	LatencyMonitorInterval     Duration                 `json:"latency_monitor_interval"`
+	HealthInterval             Duration                 `json:"health_interval"`
+	HealthFailures             int                      `json:"health_failures"`
+	RecoveryCooldown           Duration                 `json:"recovery_cooldown"`
+	RecoverySuccesses          int                      `json:"recovery_successes"`
+	StateFile                  string                   `json:"state_file"`
+	SourceCacheDir             string                   `json:"source_cache_dir"`
+	LogLevel                   string                   `json:"log_level"`
+	DNS                        DNSConfig                `json:"cloudflare_dns"`
+	SpeedTest                  SpeedTestConfig          `json:"speed_test"`
+	PostPoolSpeedTest          PostPoolSpeedTestConfig  `json:"post_pool_speed_test"`
+	BlacklistSpeedTest         BlacklistSpeedTestConfig `json:"blacklist_speed_test"`
+	Management                 ManagementConfig         `json:"management"`
+	Update                     UpdateConfig             `json:"update"`
+	Web                        WebConfig                `json:"web"`
+	Shodan                     ShodanConfig             `json:"shodan"`
 }
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:          23,
-		Listen:                 "0.0.0.0:1234",
-		IPVersion:              4,
-		IPSources:              []string{"https://www.cloudflare.com/ips-v4"},
-		IPBlacklist:            []string{},
-		RandomIPs:              true,
-		MaxCandidates:          2000,
-		ValidIPCount:           20,
-		PoolSize:               10,
-		MinHealthyCount:        5,
-		Concurrency:            100,
-		ScanProbeConcurrency:   20,
-		HealthConcurrency:      20,
-		RecoveryConcurrency:    10,
-		TargetPort:             443,
-		TLS:                    true,
-		CheckURL:               "https://cloudflare.com/cdn-cgi/trace",
-		ExpectedStatus:         200,
-		ProbeMode:              "http",
-		ScanProbeMode:          "http",
-		HealthProbeMode:        "http",
-		RecoveryProbeMode:      "http",
-		MaxLatency:             Duration(800 * time.Millisecond),
-		DialTimeout:            Duration(3 * time.Second),
-		ScanIntervalEnabled:    true,
-		ScanInterval:           Duration(6 * time.Hour),
-		LatencyMonitorInterval: Duration(2 * time.Second),
-		HealthInterval:         Duration(60 * time.Second),
-		HealthFailures:         3,
-		RecoveryCooldown:       Duration(5 * time.Minute),
-		RecoverySuccesses:      2,
-		StateFile:              "/var/lib/cfnat/state.json",
-		SourceCacheDir:         "/var/lib/cfnat/ip-cache",
-		LogLevel:               "info",
+		ConfigVersion:              24,
+		Listen:                     "0.0.0.0:1234",
+		IPVersion:                  4,
+		IPSources:                  []string{"https://www.cloudflare.com/ips-v4"},
+		IPBlacklist:                []string{},
+		RandomIPs:                  true,
+		MaxCandidates:              2000,
+		ValidIPCount:               20,
+		PoolSize:                   10,
+		MinHealthyCount:            5,
+		Concurrency:                100,
+		ScanProbeConcurrency:       20,
+		HealthConcurrencyEnabled:   true,
+		HealthConcurrency:          20,
+		RecoveryConcurrencyEnabled: true,
+		RecoveryConcurrency:        10,
+		TargetPort:                 443,
+		TLS:                        true,
+		CheckURL:                   "https://cloudflare.com/cdn-cgi/trace",
+		ExpectedStatus:             200,
+		ProbeMode:                  "http",
+		ScanProbeMode:              "http",
+		HealthProbeMode:            "http",
+		RecoveryProbeMode:          "http",
+		MaxLatency:                 Duration(800 * time.Millisecond),
+		DialTimeout:                Duration(3 * time.Second),
+		ScanIntervalEnabled:        true,
+		ScanInterval:               Duration(6 * time.Hour),
+		LatencyMonitorInterval:     Duration(2 * time.Second),
+		HealthInterval:             Duration(60 * time.Second),
+		HealthFailures:             3,
+		RecoveryCooldown:           Duration(5 * time.Minute),
+		RecoverySuccesses:          2,
+		StateFile:                  "/var/lib/cfnat/state.json",
+		SourceCacheDir:             "/var/lib/cfnat/ip-cache",
+		LogLevel:                   "info",
 		DNS: DNSConfig{
 			RecordType: "auto", SyncCount: 1, TTL: 1, TokenEnv: "CF_API_TOKEN",
 			Marker: "managed-by:cfnat-linux", LatencySyncEnabled: false, LatencySyncInterval: Duration(5 * time.Minute),
@@ -308,8 +312,16 @@ func Migrate(path string) (bool, error) {
 		raw["health_concurrency"] = 20
 		changed = true
 	}
+	if _, ok := raw["health_concurrency_enabled"]; !ok {
+		raw["health_concurrency_enabled"] = true
+		changed = true
+	}
 	if _, ok := raw["recovery_concurrency"]; !ok {
 		raw["recovery_concurrency"] = 10
+		changed = true
+	}
+	if _, ok := raw["recovery_concurrency_enabled"]; !ok {
+		raw["recovery_concurrency_enabled"] = true
 		changed = true
 	}
 	if dns, ok := raw["cloudflare_dns"].(map[string]any); ok {
@@ -490,8 +502,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 23 {
-		raw["config_version"] = 23
+	if version, _ := raw["config_version"].(float64); int(version) < 24 {
+		raw["config_version"] = 24
 		changed = true
 	}
 	if normalizeRawExclusiveLists(raw) {
@@ -557,6 +569,12 @@ func Set(path, key, value string) error {
 		cfg.ScanProbeConcurrency = parsed
 	case "health_probe_mode":
 		cfg.HealthProbeMode = strings.TrimSpace(value)
+	case "health_concurrency_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("health_concurrency_enabled 必须是 true 或 false")
+		}
+		cfg.HealthConcurrencyEnabled = parsed
 	case "health_concurrency":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
@@ -565,6 +583,12 @@ func Set(path, key, value string) error {
 		cfg.HealthConcurrency = parsed
 	case "recovery_probe_mode":
 		cfg.RecoveryProbeMode = strings.TrimSpace(value)
+	case "recovery_concurrency_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("recovery_concurrency_enabled 必须是 true 或 false")
+		}
+		cfg.RecoveryConcurrencyEnabled = parsed
 	case "recovery_concurrency":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {

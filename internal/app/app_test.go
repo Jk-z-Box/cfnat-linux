@@ -85,6 +85,21 @@ func TestPanelTemplateParses(t *testing.T) {
 	}
 }
 
+func TestConfiguredConcurrencySwitch(t *testing.T) {
+	if got := configuredConcurrency(false, 20, 100); got != 1 {
+		t.Fatalf("disabled concurrency = %d, want 1", got)
+	}
+	if got := configuredConcurrency(true, 20, 100); got != 20 {
+		t.Fatalf("enabled concurrency = %d, want 20", got)
+	}
+	if got := configuredConcurrency(true, 20, 3); got != 3 {
+		t.Fatalf("bounded concurrency = %d, want 3", got)
+	}
+	if got := configuredConcurrency(false, 20, 0); got != 0 {
+		t.Fatalf("empty concurrency = %d, want 0", got)
+	}
+}
+
 func TestDNSLatencySyncPolicy(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.DNS.Enabled = true

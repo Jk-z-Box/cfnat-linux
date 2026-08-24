@@ -1458,6 +1458,16 @@ func sortResults(results []scanner.Result) {
 	})
 }
 
+func configuredConcurrency(enabled bool, configured, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if !enabled {
+		return 1
+	}
+	return min(configured, total)
+}
+
 func sameResultIPs(a, b []scanner.Result) bool {
 	if len(a) != len(b) {
 		return false
@@ -1515,7 +1525,7 @@ func (a *App) checkAndPrunePool(ctx context.Context) healthStatus {
 	}
 	jobs := make(chan scanner.Result)
 	probeResults := make(chan probeItem, len(pool))
-	workers := min(a.cfg.HealthConcurrency, len(pool))
+	workers := configuredConcurrency(a.cfg.HealthConcurrencyEnabled, a.cfg.HealthConcurrency, len(pool))
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -1846,7 +1856,7 @@ func (a *App) checkRecoveryPool(ctx context.Context) healthStatus {
 		}
 		jobs := make(chan scanner.Result)
 		probeResults := make(chan recoveryProbeItem, len(candidates))
-		workers := min(a.cfg.RecoveryConcurrency, len(candidates))
+		workers := configuredConcurrency(a.cfg.RecoveryConcurrencyEnabled, a.cfg.RecoveryConcurrency, len(candidates))
 		var wg sync.WaitGroup
 		for i := 0; i < workers; i++ {
 			wg.Add(1)
@@ -2210,7 +2220,7 @@ func ReadState(path string) (RuntimeState, error) {
 func PrintStatus(w io.Writer, cfg config.Config) {
 	fmt.Fprintf(w, "监听地址        : %s\n", cfg.Listen)
 	fmt.Fprintf(w, "延迟上限        : %s（超过该值不优选）\n", cfg.MaxLatency.Value())
-	fmt.Fprintf(w, "探测并发        : TCP 初筛 %d，扫描复筛 %d，健康检查 %d，冷却恢复 %d\n", cfg.Concurrency, cfg.ScanProbeConcurrency, cfg.HealthConcurrency, cfg.RecoveryConcurrency)
+	fmt.Fprintf(w, "探测并发        : TCP 初筛 %d，扫描复筛 %d，健康检查 %s，冷却恢复 %s\n", cfg.Concurrency, cfg.ScanProbeConcurrency, concurrencyStatusText(cfg.HealthConcurrencyEnabled, cfg.HealthConcurrency), concurrencyStatusText(cfg.RecoveryConcurrencyEnabled, cfg.RecoveryConcurrency))
 	if cfg.ScanIntervalEnabled {
 		fmt.Fprintf(w, "定时重选        : 已启用，每 %s\n", cfg.ScanInterval.Value())
 	} else {
@@ -2376,6 +2386,13 @@ func latencyText(value int64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%dms", value)
+}
+
+func concurrencyStatusText(enabled bool, value int) string {
+	if !enabled {
+		return "串行"
+	}
+	return fmt.Sprintf("%d", value)
 }
 
 func join(values []string) string {

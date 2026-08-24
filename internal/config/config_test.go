@@ -64,8 +64,8 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if cfg.SpeedTest.Concurrency != 3 {
 		t.Fatalf("speed concurrency = %d", cfg.SpeedTest.Concurrency)
 	}
-	if cfg.ScanProbeConcurrency != 20 || cfg.HealthConcurrency != 20 || cfg.RecoveryConcurrency != 10 {
-		t.Fatalf("probe concurrency = scan:%d health:%d recovery:%d", cfg.ScanProbeConcurrency, cfg.HealthConcurrency, cfg.RecoveryConcurrency)
+	if cfg.ScanProbeConcurrency != 20 || !cfg.HealthConcurrencyEnabled || cfg.HealthConcurrency != 20 || !cfg.RecoveryConcurrencyEnabled || cfg.RecoveryConcurrency != 10 {
+		t.Fatalf("probe concurrency = scan:%d health:%t/%d recovery:%t/%d", cfg.ScanProbeConcurrency, cfg.HealthConcurrencyEnabled, cfg.HealthConcurrency, cfg.RecoveryConcurrencyEnabled, cfg.RecoveryConcurrency)
 	}
 	if cfg.PostPoolSpeedTest.Enabled {
 		t.Fatal("expected post-pool speed test to be disabled after migration")
@@ -256,15 +256,21 @@ func TestProbeConcurrencySetAndValidation(t *testing.T) {
 	if err := Set(path, "health_concurrency", "44"); err != nil {
 		t.Fatal(err)
 	}
+	if err := Set(path, "health_concurrency_enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
 	if err := Set(path, "recovery_concurrency", "11"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "recovery_concurrency_enabled", "false"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ScanProbeConcurrency != 33 || got.HealthConcurrency != 44 || got.RecoveryConcurrency != 11 {
-		t.Fatalf("probe concurrency = scan:%d health:%d recovery:%d", got.ScanProbeConcurrency, got.HealthConcurrency, got.RecoveryConcurrency)
+	if got.ScanProbeConcurrency != 33 || got.HealthConcurrencyEnabled || got.HealthConcurrency != 44 || got.RecoveryConcurrencyEnabled || got.RecoveryConcurrency != 11 {
+		t.Fatalf("probe concurrency = scan:%d health:%t/%d recovery:%t/%d", got.ScanProbeConcurrency, got.HealthConcurrencyEnabled, got.HealthConcurrency, got.RecoveryConcurrencyEnabled, got.RecoveryConcurrency)
 	}
 	if err := Set(path, "health_concurrency", "0"); err == nil {
 		t.Fatal("expected invalid health concurrency")
@@ -389,7 +395,7 @@ func TestMigrateBlacklistSpeedIntervalToHours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConfigVersion != 23 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
+	if got.ConfigVersion != 24 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
 		t.Fatalf("version=%d blacklist interval=%s", got.ConfigVersion, got.BlacklistSpeedTest.Interval.Value())
 	}
 }
