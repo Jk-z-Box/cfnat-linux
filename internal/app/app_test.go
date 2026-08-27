@@ -278,6 +278,25 @@ func TestPinnedExemptIPsNeedLatencyEligibilityWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestExistingPoolExemptIPStaysPinnedWhenLatencyFilterEnabled(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.PoolSize = 2
+	cfg.ValidIPCount = 3
+	cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = true
+	cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled = true
+	cfg.PostPoolSpeedTest.ExemptList = []string{"192.0.2.100"}
+	app := New(cfg, nil, nil, "v0.18.8", "")
+	app.pool = []scanner.Result{result("192.0.2.100", 10), result("192.0.2.1", 20), result("192.0.2.2", 30)}
+	app.mu.Lock()
+	pool := app.composeForwardPoolLocked(app.dynamicPoolLocked())
+	_, eligible := app.pinnedEligible[netip.MustParseAddr("192.0.2.100")]
+	app.mu.Unlock()
+	assertIPs(t, pool, "192.0.2.100", "192.0.2.1", "192.0.2.2")
+	if !eligible {
+		t.Fatal("existing pool exempt IP was not marked pinned eligible")
+	}
+}
+
 func TestFilterPinnedResultsExcludesDirectPoolIPsFromScanResults(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = true

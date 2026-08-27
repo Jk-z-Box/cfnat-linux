@@ -166,6 +166,8 @@ Shodan IP Panel 的資料保存在：
 
 若 IP 位於 `post_pool_speed_test.force_test_list`，則每次入池後仍會強制測速；不達標時會從轉發池剔除並遷移回 `ip_blacklist`。三個名單會自動保持互斥：手動把 IP 加入其中一個名單時，會自動從另外兩個名單移除；歷史重複配置則按 `ip_blacklist` > `force_test_list` > `exempt_list` 清理。Cloudflare DNS 會在這輪入池後篩選完成後再按最終轉發池同步，避免把剛剔除的低速 IP 同步出去。
 
+Web「測速篩選」區域與 SSH 管理選單都提供「一鍵清空三個名單」，可一次清空 `ip_blacklist`、`post_pool_speed_test.exempt_list`、`post_pool_speed_test.force_test_list`。Web 操作會立即按新名單刷新目前轉發池；SSH 選單操作會保存配置並重啟服務。
+
 若啟用黑名單 IP 定時測速，程式會按 `blacklist_speed_test.interval` 對 `ip_blacklist` 裡的單個 IP 做並發測速，週期必須以小時為單位，例如 `1h`、`24h`；速度達到 `post_pool_speed_test.min_mbps` 時會自動解除黑名單，並加入 `post_pool_speed_test.force_test_list` 入池不免測速名單。CIDR 黑名單不會展開測速，避免一次性產生過多候選。
 
 也可以直接使用命令：

@@ -620,16 +620,21 @@ func (a *App) activePinnedResultsLocked() []scanner.Result {
 		sortResults(results)
 		return results
 	}
-	results := make([]scanner.Result, 0, len(a.pinnedEligible))
-	for ip, result := range a.pinnedEligible {
-		if _, ok := configured[ip]; !ok {
-			delete(a.pinnedEligible, ip)
+	results := make([]scanner.Result, 0, len(configured))
+	for ip := range configured {
+		if old, ok := existing[ip]; ok {
+			a.pinnedEligible[ip] = old
+			results = append(results, old)
 			continue
 		}
-		if old, ok := existing[ip]; ok {
-			result = old
+		if result, ok := a.pinnedEligible[ip]; ok {
+			results = append(results, result)
 		}
-		results = append(results, result)
+	}
+	for ip := range a.pinnedEligible {
+		if _, ok := configured[ip]; !ok {
+			delete(a.pinnedEligible, ip)
+		}
 	}
 	sortResults(results)
 	return results
@@ -916,6 +921,28 @@ func (a *App) applyBlacklistNow() (int, bool) {
 	return len(removed), dnsNeedsSync
 }
 
+func (a *App) clearManagedIPLists(ctx context.Context) error {
+	for _, key := range []string{"ip_blacklist", "post_pool_speed_test_exempt_list", "post_pool_speed_test_force_test_list"} {
+		if err := config.Set(a.configPath, key, ""); err != nil {
+			return err
+		}
+	}
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.cfg = cfg
+	a.scanner = scanner.New(cfg, a.logger)
+	a.pinnedEligible = make(map[netip.Addr]scanner.Result)
+	a.updatePinnedPoolStateLocked(a.configuredPinnedExactSetLocked())
+	a.mu.Unlock()
+	a.refreshPinnedPool(ctx, "clear_lists")
+	a.saveState()
+	a.logger.Info("已一键清空 IP 黑名单、入池免测速名单、入池不免测速名单")
+	return nil
+}
+
 func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 	a.mu.Lock()
 	cfg := a.cfg
@@ -953,6 +980,7 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 	}
 	a.logger.Info("开始入池后逐个测速筛选", "targets", len(testPool), "skipped_exempt", skipped, "min_mbps", cfg.PostPoolSpeedTest.MinMBps, "timeout", cfg.PostPoolSpeedTest.Timeout.Value(), "auto_blacklist", cfg.PostPoolSpeedTest.AutoBlacklist)
 	dnsNeedsSync := false
+	passedExempt := make([]netip.Addr, 0)
 	for i, result := range testPool {
 		if err := ctx.Err(); err != nil {
 			a.logger.Warn("入池后测速筛选被中断", "error", err)
@@ -997,7 +1025,7 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 			continue
 		}
 		if !blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ForceTestList) {
-			a.addPostPoolSpeedExemptIP(result.IP)
+			passedExempt = append(passedExempt, result.IP)
 		}
 		a.mu.Lock()
 		for j, current := range a.pool {
@@ -1021,6 +1049,9 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 		a.mu.Unlock()
 		a.saveState()
 	}
+	if a.addPostPoolSpeedExemptIPs(passedExempt) {
+		a.refreshPinnedPool(context.Background(), "post_pool_speed_pass")
+	}
 	a.mu.Lock()
 	now := time.Now().UTC()
 	removed := a.state.PostPoolSpeed.Removed
@@ -1036,27 +1067,45 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 	return dnsNeedsSync
 }
 
-func (a *App) addPostPoolSpeedExemptIP(ip netip.Addr) {
-	a.mu.Lock()
-	if blacklistedAddr(ip, a.cfg.PostPoolSpeedTest.ExemptList) {
-		a.mu.Unlock()
-		return
+func (a *App) addPostPoolSpeedExemptIPs(ips []netip.Addr) bool {
+	if len(ips) == 0 {
+		return false
 	}
-	a.cfg.PostPoolSpeedTest.ExemptList = append(a.cfg.PostPoolSpeedTest.ExemptList, ip.String())
+	a.mu.Lock()
+	added := make([]netip.Addr, 0, len(ips))
+	for _, ip := range ips {
+		if blacklistedAddr(ip, a.cfg.PostPoolSpeedTest.ExemptList) {
+			continue
+		}
+		a.cfg.PostPoolSpeedTest.ExemptList = append(a.cfg.PostPoolSpeedTest.ExemptList, ip.String())
+		for _, result := range a.pool {
+			if result.IP == ip {
+				a.pinnedEligible[ip] = result
+				break
+			}
+		}
+		added = append(added, ip)
+	}
+	if len(added) == 0 {
+		a.mu.Unlock()
+		return false
+	}
 	exempt := append([]string(nil), a.cfg.PostPoolSpeedTest.ExemptList...)
 	a.mu.Unlock()
 	if err := config.Set(a.configPath, "post_pool_speed_test_exempt_list", strings.Join(exempt, "\n")); err != nil {
-		a.logger.Error("入池后测速免测名单写入失败", "ip", ip.String(), "error", err)
-		return
+		a.logger.Error("入池后测速免测名单写入失败", "count", len(added), "error", err)
+		return false
 	}
 	if cfg, err := config.Load(a.configPath); err == nil {
 		a.mu.Lock()
 		a.cfg = cfg
 		a.scanner = scanner.New(cfg, a.logger)
 		a.mu.Unlock()
-		a.refreshPinnedPool(context.Background(), "post_pool_speed_pass")
+	}
+	for _, ip := range added {
 		a.logger.Info("入池后测速达标 IP 已加入免测速名单", "ip", ip.String())
 	}
+	return true
 }
 
 func (a *App) maybeRunBlacklistSpeedTest(ctx context.Context) {

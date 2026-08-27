@@ -378,6 +378,20 @@ toggle_recovery_concurrency() {
   done
 }
 
+clear_ip_lists() {
+  read -r -p "确认清空 IP 黑名单、IP 入池免测速名单、IP 入池不免测速名单？[y/N]: " value
+  case "${value}" in
+    y|Y|yes|YES|Yes)
+      "${BIN}" -config "${CONFIG_FILE}" config-set ip_blacklist "" || return
+      "${BIN}" -config "${CONFIG_FILE}" config-set post_pool_speed_test_exempt_list "" || return
+      "${BIN}" -config "${CONFIG_FILE}" config-set post_pool_speed_test_force_test_list "" || return
+      restart_if_running
+      echo "三个名单已清空。"
+      ;;
+    *) echo "已取消。" ;;
+  esac
+}
+
 toggle_post_pool_exempt_recovery_evict() {
   local value
   while true; do
@@ -748,6 +762,7 @@ config_menu() {
     echo " 40) 健康检查/延迟排序并发数"
     echo " 41) 冷却恢复池检查并发开关"
     echo " 42) 冷却恢复池检查并发数"
+    echo " 43) 一键清空 IP 黑名单/免测速名单/不免测速名单"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -806,6 +821,7 @@ config_menu() {
       40) edit_health_concurrency; pause_screen ;;
       41) toggle_recovery_concurrency; pause_screen ;;
       42) edit_recovery_concurrency; pause_screen ;;
+      43) clear_ip_lists; pause_screen ;;
       0) return ;;
       *) echo "无效选项，请重新输入。" ;;
     esac
