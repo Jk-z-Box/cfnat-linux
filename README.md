@@ -53,16 +53,19 @@ IP/CIDR 來源 → 候選生成 → TCP 初篩 → 分批下載測速 → 分批
 
 安裝機支援 Debian/Ubuntu 等 systemd Linux，以及 OpenWrt x86_64。腳本會優先使用包內已校驗二進位；缺少必要工具時，systemd 平台需具備 curl、tar 和 sha256sum，OpenWrt 會透過 opkg 自動補齊 bash、curl、tar、sha256sum、install 等依賴。若系統沒有可用二進位且沒有 Go，安裝腳本才會下載經過 SHA-256 校驗的臨時官方 Go 工具鏈；編譯完成後自動刪除，不污染系統環境。
 
-```sh
-curl -fL -o cfnat-linux-latest.tar.gz \
-https://github.com/Jk-z-Box/cfnat-linux/releases/latest/download/cfnat-linux-latest.tar.gz
+Debian/Ubuntu 等 systemd Linux：
 
-tar -xzf cfnat-linux-latest.tar.gz
-cd cfnat-linux
-sh ./scripts/install.sh
+```sh
+bash -c 'set -e; tmp=$(mktemp -d); curl -fsSL https://github.com/Jk-z-Box/cfnat-linux/releases/latest/download/cfnat-linux-latest.tar.gz -o /tmp/cfnat-linux-latest.tar.gz; tar -xzf /tmp/cfnat-linux-latest.tar.gz -C "$tmp"; cd "$tmp/cfnat-linux"; sudo bash scripts/install.sh'
 ```
 
-在 Debian/Ubuntu 等 systemd 系統中也可以使用 `sudo sh ./scripts/install.sh`；OpenWrt 預設以 root 登入，直接執行即可。
+OpenWrt x86_64：
+
+```sh
+sh -c 'set -e; tmp=$(mktemp -d); curl -fsSL https://github.com/Jk-z-Box/cfnat-linux/releases/latest/download/cfnat-linux-latest.tar.gz -o /tmp/cfnat-linux-latest.tar.gz; tar -xzf /tmp/cfnat-linux-latest.tar.gz -C "$tmp"; cd "$tmp/cfnat-linux"; sh scripts/install.sh'
+```
+
+命令中的 GitHub 地址必須保持純 URL，不能寫成 `[https://...](https://...)` 這種 Markdown 連結格式。OpenWrt 預設以 root 登入，直接執行即可；Debian/Ubuntu 若已經是 root，也可以把 `sudo bash scripts/install.sh` 改成 `bash scripts/install.sh`。
 
 安裝腳本會互動詢問：
 
