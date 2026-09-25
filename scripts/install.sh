@@ -403,7 +403,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 25,
+  "config_version": 26,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -423,6 +423,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   "tls": true,
   "tls_server_name": "",
   "insecure_skip_verify": false,
+  "availability_check_enabled": true,
   "check_url": "https://cloudflare.com/cdn-cgi/trace",
   "expected_status": 200,
   "probe_mode": "http",

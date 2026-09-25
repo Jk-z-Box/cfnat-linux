@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,6 +132,7 @@ func TestProbeTCPMode(t *testing.T) {
 	port, _ := strconv.Atoi(portText)
 	cfg := config.Defaults()
 	cfg.ProbeMode = "tcp"
+	cfg.AvailabilityCheckEnabled = false
 	cfg.TargetPort = port
 	cfg.MaxLatency = config.Duration(time.Second)
 	cfg.DialTimeout = config.Duration(time.Second)
@@ -140,6 +143,51 @@ func TestProbeTCPMode(t *testing.T) {
 	}
 	if got.IP.String() != "127.0.0.1" {
 		t.Fatalf("ip = %s", got.IP)
+	}
+}
+
+func TestTCPProbeAvailabilityCheckIsIndependent(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	var status atomic.Int64
+	status.Store(http.StatusServiceUnavailable)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if status.Load() == http.StatusOK {
+			time.Sleep(120 * time.Millisecond)
+		}
+		w.WriteHeader(int(status.Load()))
+	})}
+	defer server.Close()
+	go server.Serve(listener)
+
+	_, portText, _ := net.SplitHostPort(listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	cfg := config.Defaults()
+	cfg.TargetPort = port
+	cfg.TLS = false
+	cfg.CheckURL = "http://example.com/availability"
+	cfg.MaxLatency = config.Duration(50 * time.Millisecond)
+	cfg.DialTimeout = config.Duration(time.Second)
+	ip := netip.MustParseAddr("127.0.0.1")
+
+	cfg.AvailabilityCheckEnabled = false
+	if _, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))).ProbeWithMode(context.Background(), ip, "tcp"); err != nil {
+		t.Fatalf("disabled availability check rejected TCP probe: %v", err)
+	}
+
+	cfg.AvailabilityCheckEnabled = true
+	_, err = New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))).ProbeWithMode(context.Background(), ip, "tcp")
+	var pe *ProbeError
+	if !errors.As(err, &pe) || pe.Kind != "availability_status" {
+		t.Fatalf("expected availability_status, got %v", err)
+	}
+
+	status.Store(http.StatusOK)
+	if _, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil))).ProbeWithMode(context.Background(), ip, "tcp"); err != nil {
+		t.Fatalf("availability response time should not replace TCP latency limit: %v", err)
 	}
 }
 

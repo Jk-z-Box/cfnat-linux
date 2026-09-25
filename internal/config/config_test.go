@@ -38,6 +38,33 @@ func TestMigrateBrokenDefaultEndpoint(t *testing.T) {
 	}
 }
 
+func TestAvailabilityCheckSetAndValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	data, _ := json.Marshal(Defaults())
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "availability_check_enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "check_url", "https://example.com/cdn-cgi/trace"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "expected_status", "204"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AvailabilityCheckEnabled || cfg.CheckURL != "https://example.com/cdn-cgi/trace" || cfg.ExpectedStatus != 204 {
+		t.Fatalf("availability config = enabled:%t url:%q status:%d", cfg.AvailabilityCheckEnabled, cfg.CheckURL, cfg.ExpectedStatus)
+	}
+	if err := Set(path, "expected_status", "99"); err == nil {
+		t.Fatal("expected invalid HTTP status")
+	}
+}
+
 func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	raw := map[string]any{
@@ -60,6 +87,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	}
 	if cfg.SpeedTest.URL != "https://speed.cloudflare.com/__down?bytes=50000000" {
 		t.Fatalf("speed url = %q", cfg.SpeedTest.URL)
+	}
+	if !cfg.AvailabilityCheckEnabled {
+		t.Fatal("availability check should default to enabled")
 	}
 	if cfg.SpeedTest.Concurrency != 3 {
 		t.Fatalf("speed concurrency = %d", cfg.SpeedTest.Concurrency)
@@ -401,7 +431,7 @@ func TestMigrateBlacklistSpeedIntervalToHours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConfigVersion != 25 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour || !got.PostPoolSpeedTest.ExemptEnabled {
+	if got.ConfigVersion != 26 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour || !got.PostPoolSpeedTest.ExemptEnabled || !got.AvailabilityCheckEnabled {
 		t.Fatalf("version=%d blacklist interval=%s", got.ConfigVersion, got.BlacklistSpeedTest.Interval.Value())
 	}
 }

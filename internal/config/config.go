@@ -129,6 +129,7 @@ type Config struct {
 	TLS                        bool                     `json:"tls"`
 	TLSServerName              string                   `json:"tls_server_name"`
 	InsecureSkipVerify         bool                     `json:"insecure_skip_verify"`
+	AvailabilityCheckEnabled   bool                     `json:"availability_check_enabled"`
 	CheckURL                   string                   `json:"check_url"`
 	ExpectedStatus             int                      `json:"expected_status"`
 	ProbeMode                  string                   `json:"probe_mode"`
@@ -160,7 +161,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:              25,
+		ConfigVersion:              26,
 		Listen:                     "0.0.0.0:1234",
 		IPVersion:                  4,
 		IPSources:                  []string{"https://www.cloudflare.com/ips-v4"},
@@ -178,6 +179,7 @@ func Defaults() Config {
 		RecoveryConcurrency:        10,
 		TargetPort:                 443,
 		TLS:                        true,
+		AvailabilityCheckEnabled:   true,
 		CheckURL:                   "https://cloudflare.com/cdn-cgi/trace",
 		ExpectedStatus:             200,
 		ProbeMode:                  "http",
@@ -260,6 +262,10 @@ func Migrate(path string) (bool, error) {
 		if raw["tls_server_name"] == "cloudflaremirrors.com" {
 			raw["tls_server_name"] = ""
 		}
+	}
+	if _, ok := raw["availability_check_enabled"]; !ok {
+		raw["availability_check_enabled"] = true
+		changed = true
 	}
 	if _, ok := raw["source_cache_dir"]; !ok {
 		raw["source_cache_dir"] = "/var/lib/cfnat/ip-cache"
@@ -507,8 +513,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 25 {
-		raw["config_version"] = 25
+	if version, _ := raw["config_version"].(float64); int(version) < 26 {
+		raw["config_version"] = 26
 		changed = true
 	}
 	if normalizeRawExclusiveLists(raw) {
@@ -559,6 +565,20 @@ func Set(path, key, value string) error {
 			return errors.New("延迟格式无效，请使用 300ms、1s 等格式")
 		}
 		cfg.MaxLatency = Duration(parsed)
+	case "availability_check_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("availability_check_enabled 只能是 true 或 false")
+		}
+		cfg.AvailabilityCheckEnabled = parsed
+	case "check_url":
+		cfg.CheckURL = strings.TrimSpace(value)
+	case "expected_status":
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return errors.New("expected_status 必须是整数")
+		}
+		cfg.ExpectedStatus = parsed
 	case "probe_mode":
 		cfg.ProbeMode = strings.TrimSpace(value)
 		cfg.ScanProbeMode = strings.TrimSpace(value)
@@ -1171,6 +1191,9 @@ func (c *Config) Validate() error {
 	u, err := url.Parse(c.CheckURL)
 	if err != nil || u.Hostname() == "" {
 		return fmt.Errorf("check_url 无效: %q", c.CheckURL)
+	}
+	if c.ExpectedStatus < 100 || c.ExpectedStatus > 599 {
+		return errors.New("expected_status 必须在 100 到 599 之间")
 	}
 	if c.TLS && u.Scheme != "https" {
 		return errors.New("tls=true 时 check_url 必须使用 https")

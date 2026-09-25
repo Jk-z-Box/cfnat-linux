@@ -157,6 +157,8 @@ Shodan IP Panel 的資料保存在：
 
 掃描日誌會彙總失敗原因，例如 `tcp_timeout`、`tls`、`status`、`latency` 和 `colo`。這樣可以直接判斷是線路不可達、TLS/SNI、探測網址、延遲閾值還是機房篩選導致無結果。
 
+延遲檢測與實際可用性驗證彼此獨立。`scan_probe_mode`、`health_probe_mode`、`recovery_probe_mode` 與固定免測速池的 `exempt_probe_mode` 只決定各環節如何測量延遲；當 `availability_check_enabled=true` 時，每個 IP 在延遲檢測通過後，還會使用 `check_url` 指定的業務域名/SNI 驗證 TLS 憑證與 `expected_status` HTTP 狀態碼。可用性驗證的 HTTP 往返時間不會覆蓋原本的 TCPing/ICMP 延遲值，也不會另開一組並發，而是在原工作協程內順序執行。建議將 `check_url` 設為實際使用的 Cloudflare 業務域名，例如 `https://example.com/cdn-cgi/trace`，以排除只能服務 `speed.cloudflare.com` 的受限節點。
+
 若啟用下載測速篩選，TCP 初篩完成後會按 TCP 延遲排序分批做下載測速。測速思路參考 `XIU2/CloudflareSpeedTest`：每批按 `speed_test.concurrency` 並發下載測速；速度低於 `speed_test.min_mbps` 或完全無下載速度的 IP 不會進入後續探測複篩。若本批通過數不足，會繼續處理下一批 TCP 可連候選；每批通過最終複篩的 IP 會先合併進健康池並熱更新 TCP 轉發，DNS 則仍等本輪掃描完成後再按同步策略更新。
 
 若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度、免測跳過數與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。
@@ -246,12 +248,13 @@ DNS 同步分為兩類：
 | `pool_size` | `10` | TCP 轉發目標池大小 |
 | `min_healthy_count` | `5` | 健康 IP 少於此數量時觸發故障重選；新池更快則整池替換，新池較慢則保留舊健康 IP 並補齊到 `pool_size` |
 | `target_port` | `443` | 上游 Cloudflare 連接埠 |
+| `availability_check_enabled` | `true` | 獨立 HTTP/TLS 可用性驗證總開關；在延遲檢測後驗證業務域名/SNI、憑證與 HTTP 狀態 |
 | `check_url` | `https://cloudflare.com/cdn-cgi/trace` | HTTP 狀態檢查位址及 TLS SNI 來源 |
 | `expected_status` | `200` | 期望回應碼 |
 | `probe_mode` | `http` | 舊版兼容欄位；透過命令列設定時會同步套用到以下三個獨立檢測方式 |
-| `scan_probe_mode` | `http` | 掃描復篩檢測方式：`http`/`https` 為 HTTP/TLS 探測，`tcp`/`tcping` 為 TCPing，`icmp`/`ping` 為 ICMP Ping |
-| `health_probe_mode` | `http` | 池內健康檢查與延遲排序檢測方式 |
-| `recovery_probe_mode` | `http` | 冷卻恢復池恢復檢測方式 |
+| `scan_probe_mode` | `http` | 掃描復篩延遲檢測方式：`http`/`https`、`tcp`/`tcping` 或 `icmp`/`ping`；可用性驗證由獨立開關控制 |
+| `health_probe_mode` | `http` | 池內健康檢查與延遲排序的延遲檢測方式 |
+| `recovery_probe_mode` | `http` | 冷卻恢復池的延遲檢測方式 |
 | `max_latency` | `800ms` | 依各環節檢測方式測得的最大延遲；超過閾值的 IP 直接淘汰 |
 | `colos` | `[]` | 例如 `HKG`、`NRT`、`SJC`；空陣列不篩選 |
 | `scan_interval_enabled` | `true` | 是否啟用定期完整重選 |

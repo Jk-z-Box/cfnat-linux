@@ -288,6 +288,40 @@ toggle_post_pool_exempt() {
   done
 }
 
+toggle_availability_check() {
+  local value
+  while true; do
+    read -r -p "是否启用独立 HTTP/TLS 可用性验证？[y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config availability_check_enabled true && return ;;
+      n|N|no|NO|No) set_config availability_check_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
+edit_availability_check_url() {
+  local value
+  while true; do
+    read -r -p "可用性验证 URL（建议使用实际业务域名，如 https://example.com/cdn-cgi/trace）: " value
+    case "${value}" in
+      https://*) set_config check_url "${value}" && return ;;
+      *) echo "请输入有效的 HTTPS URL。" >&2 ;;
+    esac
+  done
+}
+
+edit_availability_expected_status() {
+  local value
+  while true; do
+    read -r -p "可用性验证期望 HTTP 状态码（100-599，通常为 200）: " value
+    if [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 100 && value <= 599 )); then
+      set_config expected_status "${value}" && return
+    fi
+    echo "请输入 100-599 的整数。" >&2
+  done
+}
+
 toggle_post_pool_exempt_latency_filter() {
   local value
   while true; do
@@ -776,6 +810,9 @@ config_menu() {
     echo " 42) 冷却恢复池检查并发数"
     echo " 43) 一键清空 IP 黑名单/免测速名单/不免测速名单"
     echo " 44) IP 入池免测速功能总开关"
+    echo " 45) 独立 HTTP/TLS 可用性验证开关"
+    echo " 46) 可用性验证 URL / 业务 SNI"
+    echo " 47) 可用性验证期望 HTTP 状态码"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -836,6 +873,9 @@ config_menu() {
       42) edit_recovery_concurrency; pause_screen ;;
       43) clear_ip_lists; pause_screen ;;
       44) toggle_post_pool_exempt; pause_screen ;;
+      45) toggle_availability_check; pause_screen ;;
+      46) edit_availability_check_url; pause_screen ;;
+      47) edit_availability_expected_status; pause_screen ;;
       0) return ;;
       *) echo "无效选项，请重新输入。" ;;
     esac

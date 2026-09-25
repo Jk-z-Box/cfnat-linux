@@ -2276,6 +2276,11 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 		fmt.Fprintln(w, "定时重选        : 未启用")
 	}
 	fmt.Fprintf(w, "延迟监控        : 每 %s 重新排序转发池\n", cfg.LatencyMonitorInterval.Value())
+	if cfg.AvailabilityCheckEnabled {
+		fmt.Fprintf(w, "可用性验证      : 已启用，%s，期望 HTTP %d\n", cfg.CheckURL, cfg.ExpectedStatus)
+	} else {
+		fmt.Fprintln(w, "可用性验证      : 未启用")
+	}
 	if cfg.SpeedTest.Enabled {
 		fmt.Fprintf(w, "测速筛选        : ≥ %.2f MB/s，最多测试 %d 个候选，并发 %d\n", cfg.SpeedTest.MinMBps, cfg.SpeedTest.MaxCandidates, cfg.SpeedTest.Concurrency)
 	} else {

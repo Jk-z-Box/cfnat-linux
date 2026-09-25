@@ -85,6 +85,34 @@ func TestPanelTemplateParses(t *testing.T) {
 	}
 }
 
+func TestPanelTemplateRendersAvailabilitySettings(t *testing.T) {
+	tmpl, err := template.New("panel").Funcs(template.FuncMap{"join": strings.Join}).Parse(panelHTML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.CheckURL = "https://test.example.com/cdn-cgi/trace"
+	payload := map[string]any{
+		"summary": map[string]any{"cfnat": "运行中", "scan": "完成", "speed": "等待", "pinned": "0", "primary_ip": "", "dns": "未同步"},
+		"shodan":  map[string]any{"state": "未启用", "ips": 0, "error": "", "last_success": ""},
+		"cfnat":   map[string]any{"text": "", "proxy": "运行中", "proxy_on": true, "scan_paused": false},
+	}
+	data := map[string]any{
+		"CSS": template.CSS(css), "Payload": payload, "Config": cfg, "MaxLatencyMS": 800, "LatencySecs": 2,
+		"PostPoolSpeedSecs": 5, "PostPoolExemptLatencyMS": 800, "PostPoolExemptRecoveryHours": 24,
+		"BlacklistSpeedIntervalHours": 24, "BlacklistSpeedSecs": 5, "ShodanConfig": shodan.StoreConfig{},
+		"ShodanProfile": shodan.Profile{}, "ShodanStatus": shodan.Status{},
+	}
+	var output bytes.Buffer
+	if err := tmpl.Execute(&output, data); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	if !strings.Contains(text, "availability_check_enabled") || !strings.Contains(text, "https://test.example.com/cdn-cgi/trace") || !strings.Contains(text, "toggle.checked=true") {
+		t.Fatalf("availability settings missing from rendered panel")
+	}
+}
+
 func TestConfiguredConcurrencySwitch(t *testing.T) {
 	if got := configuredConcurrency(false, 20, 100); got != 1 {
 		t.Fatalf("disabled concurrency = %d, want 1", got)

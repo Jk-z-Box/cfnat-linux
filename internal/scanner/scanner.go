@@ -493,14 +493,44 @@ func (s *Scanner) Probe(ctx context.Context, ip netip.Addr) (Result, error) {
 }
 
 func (s *Scanner) ProbeWithMode(ctx context.Context, ip netip.Addr, mode string) (Result, error) {
+	var result Result
+	var err error
 	switch mode {
 	case "tcp":
-		return s.probeTCP(ctx, ip)
+		result, err = s.probeTCP(ctx, ip)
 	case "icmp":
-		return s.probeICMP(ctx, ip)
+		result, err = s.probeICMP(ctx, ip)
 	default:
 		return s.probeHTTP(ctx, ip)
 	}
+	if err != nil {
+		return Result{}, err
+	}
+	if s.cfg.AvailabilityCheckEnabled {
+		if err := s.probeAvailability(ctx, ip); err != nil {
+			kind := "availability"
+			var pe *ProbeError
+			if errors.As(err, &pe) {
+				kind += "_" + pe.Kind
+			}
+			return Result{}, probeError(kind, fmt.Errorf("可用性验证失败: %w", err))
+		}
+	}
+	return result, nil
+}
+
+// probeAvailability validates the configured business URL, TLS/SNI certificate,
+// and expected HTTP status without mixing the HTTP round-trip into latency limits.
+func (s *Scanner) probeAvailability(ctx context.Context, ip netip.Addr) error {
+	u, _ := url.Parse(s.cfg.CheckURL)
+	status, _, err := s.request(ctx, ip, u.RequestURI(), false)
+	if err != nil {
+		return err
+	}
+	if status != s.cfg.ExpectedStatus {
+		return probeError("status", fmt.Errorf("状态码 %d，期望 %d", status, s.cfg.ExpectedStatus))
+	}
+	return nil
 }
 
 func (s *Scanner) probeHTTP(ctx context.Context, ip netip.Addr) (Result, error) {
@@ -512,8 +542,8 @@ func (s *Scanner) probeHTTP(ctx context.Context, ip netip.Addr) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	if status != s.cfg.ExpectedStatus {
-		return Result{}, probeError("status", fmt.Errorf("状态码 %d，期望 %d", status, s.cfg.ExpectedStatus))
+	if s.cfg.AvailabilityCheckEnabled && status != s.cfg.ExpectedStatus {
+		return Result{}, probeError("availability_status", fmt.Errorf("状态码 %d，期望 %d", status, s.cfg.ExpectedStatus))
 	}
 	if latency > s.cfg.MaxLatency.Value() {
 		return Result{}, probeError("latency", fmt.Errorf("延迟 %s 超过限制 %s", latency, s.cfg.MaxLatency.Value()))
