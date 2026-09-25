@@ -111,6 +111,15 @@ func TestPanelTemplateRendersAvailabilitySettings(t *testing.T) {
 	if !strings.Contains(text, "availability_check_enabled") || !strings.Contains(text, "https://test.example.com/cdn-cgi/trace") || !strings.Contains(text, "toggle.checked=true") {
 		t.Fatalf("availability settings missing from rendered panel")
 	}
+	if !strings.Contains(text, `urlInput.value="https://test.example.com/cdn-cgi/trace"`) {
+		t.Fatalf("availability URL is not rendered as a JavaScript string value:\n%s", text)
+	}
+	if strings.Contains(text, `urlInput.value="\"https://test.example.com/cdn-cgi/trace\""`) {
+		t.Fatalf("availability URL contains literal wrapping quotes:\n%s", text)
+	}
+	if !strings.Contains(text, `statusInput.value="200"`) {
+		t.Fatalf("expected HTTP status is not rendered as an input value:\n%s", text)
+	}
 }
 
 func TestConfiguredConcurrencySwitch(t *testing.T) {
