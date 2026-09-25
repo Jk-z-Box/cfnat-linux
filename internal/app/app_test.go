@@ -309,6 +309,24 @@ func TestFilterPinnedResultsExcludesDirectPoolIPsFromScanResults(t *testing.T) {
 	assertIPs(t, filtered, "192.0.2.1")
 }
 
+func TestDisabledExemptFeatureDoesNotCreatePinnedPool(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.PoolSize = 2
+	cfg.PostPoolSpeedTest.ExemptEnabled = false
+	cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled = true
+	cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled = false
+	cfg.PostPoolSpeedTest.ExemptList = []string{"192.0.2.100"}
+	app := New(cfg, nil, nil, "v0.18.10", "")
+	app.pool = []scanner.Result{result("192.0.2.100", 10)}
+	app.mu.Lock()
+	pool := app.composeForwardPoolLocked([]scanner.Result{result("192.0.2.1", 20), result("192.0.2.2", 30)})
+	app.mu.Unlock()
+	assertIPs(t, pool, "192.0.2.1", "192.0.2.2")
+	if app.state.PinnedPool.Enabled || app.state.PinnedPool.Total != 0 {
+		t.Fatalf("pinned state = %+v", app.state.PinnedPool)
+	}
+}
+
 func TestTargetStatesSanitizeSyntheticLatency(t *testing.T) {
 	targets := targetStatesFromResults([]scanner.Result{result("192.0.2.1", 1<<62)}, "healthy")
 	if len(targets) != 1 {

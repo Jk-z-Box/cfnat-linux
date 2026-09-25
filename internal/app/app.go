@@ -578,7 +578,7 @@ func (a *App) currentHealthyDynamicPoolLocked() []scanner.Result {
 }
 
 func (a *App) configuredPinnedExactSetLocked() map[netip.Addr]struct{} {
-	if !a.cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled {
+	if !a.cfg.PostPoolSpeedTest.ExemptEnabled || !a.cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled {
 		return nil
 	}
 	set := map[netip.Addr]struct{}{}
@@ -702,7 +702,7 @@ func (a *App) updatePinnedPoolStateLocked(pinnedSet map[netip.Addr]struct{}) {
 			cooling++
 		}
 	}
-	a.state.PinnedPool.Enabled = a.cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled
+	a.state.PinnedPool.Enabled = a.cfg.PostPoolSpeedTest.ExemptEnabled && a.cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled
 	a.state.PinnedPool.Total = len(pinnedSet)
 	a.state.PinnedPool.Active = active
 	a.state.PinnedPool.Cooling = cooling
@@ -956,7 +956,7 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 	testPool := make([]scanner.Result, 0, len(pool))
 	skipped := 0
 	for _, result := range pool {
-		if blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ExemptList) && !blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ForceTestList) {
+		if cfg.PostPoolSpeedTest.ExemptEnabled && blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ExemptList) && !blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ForceTestList) {
 			skipped++
 			continue
 		}
@@ -1024,7 +1024,7 @@ func (a *App) runPostPoolSpeedTest(ctx context.Context) bool {
 			a.saveState()
 			continue
 		}
-		if !blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ForceTestList) {
+		if cfg.PostPoolSpeedTest.ExemptEnabled && !blacklistedAddr(result.IP, cfg.PostPoolSpeedTest.ForceTestList) {
 			passedExempt = append(passedExempt, result.IP)
 		}
 		a.mu.Lock()
@@ -1804,7 +1804,7 @@ func (a *App) addRecoveryLocked(result scanner.Result) {
 func (a *App) observePinnedCoolingLocked(now time.Time) map[netip.Addr]struct{} {
 	pinned := a.configuredPinnedExactSetLocked()
 	if len(pinned) == 0 {
-		a.state.PinnedPool = PinnedPoolState{Enabled: a.cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled, DynamicLimit: a.cfg.PoolSize}
+		a.state.PinnedPool = PinnedPoolState{Enabled: a.cfg.PostPoolSpeedTest.ExemptEnabled && a.cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled, DynamicLimit: a.cfg.PoolSize}
 		return nil
 	}
 	if a.state.PinnedHealth == nil {
@@ -2286,7 +2286,8 @@ func PrintStatus(w io.Writer, cfg config.Config) {
 	} else {
 		fmt.Fprintln(w, "入池后测速      : 未启用")
 	}
-	if cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled {
+	fmt.Fprintf(w, "免测速功能      : %s（名单保留 %d 个）\n", boolLabel(cfg.PostPoolSpeedTest.ExemptEnabled), len(cfg.PostPoolSpeedTest.ExemptList))
+	if cfg.PostPoolSpeedTest.ExemptEnabled && cfg.PostPoolSpeedTest.ExemptDirectPoolEnabled {
 		latencyFilter := "未启用"
 		if cfg.PostPoolSpeedTest.ExemptLatencyFilterEnabled {
 			latencyFilter = fmt.Sprintf("≤ %s，%s，并发 %d", cfg.PostPoolSpeedTest.ExemptMaxLatency.Value(), cfg.PostPoolSpeedTest.ExemptProbeMode, cfg.PostPoolSpeedTest.ExemptLatencyConcurrency)

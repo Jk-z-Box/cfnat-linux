@@ -79,6 +79,9 @@ func TestMigrateOversizedDefaultSpeedTestURL(t *testing.T) {
 	if len(cfg.PostPoolSpeedTest.ExemptList) != 0 {
 		t.Fatalf("post-pool exempt list = %+v", cfg.PostPoolSpeedTest.ExemptList)
 	}
+	if !cfg.PostPoolSpeedTest.ExemptEnabled {
+		t.Fatal("post-pool exemption should default to enabled")
+	}
 	if len(cfg.PostPoolSpeedTest.ForceTestList) != 0 {
 		t.Fatalf("post-pool force-test list = %+v", cfg.PostPoolSpeedTest.ForceTestList)
 	}
@@ -314,6 +317,9 @@ func TestPostPoolSpeedTestSetAndValidation(t *testing.T) {
 	if err := Set(path, "post_pool_speed_test_auto_blacklist", "true"); err != nil {
 		t.Fatal(err)
 	}
+	if err := Set(path, "post_pool_speed_test_exempt_enabled", "false"); err != nil {
+		t.Fatal(err)
+	}
 	if err := Set(path, "post_pool_speed_test_exempt_list", "192.0.2.1\n198.51.100.0/24"); err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +342,7 @@ func TestPostPoolSpeedTestSetAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist || len(got.PostPoolSpeedTest.ExemptList) != 2 || len(got.PostPoolSpeedTest.ForceTestList) != 1 || !got.PostPoolSpeedTest.ExemptDirectPoolEnabled || !got.PostPoolSpeedTest.ExemptLatencyFilterEnabled || got.PostPoolSpeedTest.ExemptMaxLatency.Value() != 300*time.Millisecond || got.PostPoolSpeedTest.ExemptProbeMode != "tcp" || got.PostPoolSpeedTest.ExemptLatencyConcurrency != 8 || !got.PostPoolSpeedTest.ExemptRecoveryEvictEnabled {
+	if !got.PostPoolSpeedTest.Enabled || got.PostPoolSpeedTest.MinMBps != 0.5 || got.PostPoolSpeedTest.Timeout.Value() == 0 || !got.PostPoolSpeedTest.AutoBlacklist || got.PostPoolSpeedTest.ExemptEnabled || len(got.PostPoolSpeedTest.ExemptList) != 2 || len(got.PostPoolSpeedTest.ForceTestList) != 1 || !got.PostPoolSpeedTest.ExemptDirectPoolEnabled || !got.PostPoolSpeedTest.ExemptLatencyFilterEnabled || got.PostPoolSpeedTest.ExemptMaxLatency.Value() != 300*time.Millisecond || got.PostPoolSpeedTest.ExemptProbeMode != "tcp" || got.PostPoolSpeedTest.ExemptLatencyConcurrency != 8 || !got.PostPoolSpeedTest.ExemptRecoveryEvictEnabled {
 		t.Fatalf("post pool speed config = %+v", got.PostPoolSpeedTest)
 	}
 	if err := Set(path, "post_pool_speed_test_min_mbps", "0"); err == nil {
@@ -395,7 +401,7 @@ func TestMigrateBlacklistSpeedIntervalToHours(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ConfigVersion != 24 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour {
+	if got.ConfigVersion != 25 || got.BlacklistSpeedTest.Interval.Value() != 24*time.Hour || !got.PostPoolSpeedTest.ExemptEnabled {
 		t.Fatalf("version=%d blacklist interval=%s", got.ConfigVersion, got.BlacklistSpeedTest.Interval.Value())
 	}
 }

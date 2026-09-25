@@ -161,7 +161,7 @@ Shodan IP Panel 的資料保存在：
 
 若啟用入池後逐個測速篩選，完整掃描完成並熱更新轉發池後，會使用同一個 `speed_test.url` 對目前轉發池中的 IP 逐個測速，每個 IP 最多測試 `post_pool_speed_test.timeout`。Web「即時狀態總覽」會顯示測速狀態，例如測速中、目前進度、免測跳過數與已剔除數。速度低於 `post_pool_speed_test.min_mbps`、無速度或測速失敗的 IP 會在該 IP 測完後立即從轉發池剔除；若 `post_pool_speed_test.auto_blacklist=true`，被剔除的 IP 會立即寫入 `ip_blacklist`，後續掃描不再使用。
 
-`post_pool_speed_test.exempt_list` 是「IP 入池免測速名單」。測速達標的普通 IP 會即時加入此名單；後續入池後逐個測速會跳過它。當 `post_pool_speed_test.exempt_direct_pool_enabled=true` 時，名單中的精確 IP 會成為固定免測速池候選；若 `post_pool_speed_test.exempt_latency_filter_enabled=true`，程式會在啟動/重啟以及每次觸發掃描前，先用 `post_pool_speed_test.exempt_probe_mode` 與 `post_pool_speed_test.exempt_max_latency` 對「不在轉發池且不在冷卻池」的免測精確 IP 做獨立延遲篩選，達標才直接固定入池，不達標則暫時不入池但仍保留在免測名單中。這套篩選只服務固定免測速池，與普通掃描流程的 `scan_probe_mode` / `max_latency` 互不混用。
+`post_pool_speed_test.exempt_list` 是「IP 入池免測速名單」。`post_pool_speed_test.exempt_enabled` 是免測速功能總開關；關閉時保留名單內容，但名單 IP 不再跳過入池後測速、測速達標 IP 不再自動加入名單、固定免測速池也會暫停。重新開啟後原名單繼續生效。開關啟用時，測速達標的普通 IP 會即時加入此名單，後續入池後逐個測速會跳過它。當 `post_pool_speed_test.exempt_direct_pool_enabled=true` 時，名單中的精確 IP 會成為固定免測速池候選；若 `post_pool_speed_test.exempt_latency_filter_enabled=true`，程式會在啟動/重啟以及每次觸發掃描前，先用 `post_pool_speed_test.exempt_probe_mode` 與 `post_pool_speed_test.exempt_max_latency` 對「不在轉發池且不在冷卻池」的免測精確 IP 做獨立延遲篩選，達標才直接固定入池，不達標則暫時不入池但仍保留在免測名單中。這套篩選只服務固定免測速池，與普通掃描流程的 `scan_probe_mode` / `max_latency` 互不混用。
 
 固定免測速池達標入池後，掃描中不會被動態掃描結果頂出，也不計入 `valid_ip_count` 與 `pool_size`。例如 `pool_size=50`、免測精確 IP 有 60 個，其中 45 個延遲達標、新掃描合格 IP 有 60 個時，最終轉發池會是 45 個固定免測 IP 加上動態掃描前 50 個，共 95 個。CIDR 項目不會直接展開入池，只作為免測匹配規則，避免一個網段產生過大的固定池。
 
@@ -273,6 +273,7 @@ DNS 同步分為兩類：
 | `post_pool_speed_test.timeout` | `5s` | 入池後單個 IP 最長測速時間 |
 | `post_pool_speed_test.auto_blacklist` | `false` | 入池後測速不達標的 IP 是否自動加入 `ip_blacklist` |
 | `post_pool_speed_test.exempt_list` | `[]` | 入池後測速免測名單；精確 IP 可固定入池，CIDR 只作為免測匹配規則 |
+| `post_pool_speed_test.exempt_enabled` | `true` | 免測速功能總開關；關閉時保留名單，但停用跳過測速、自動加入名單與固定免測速池 |
 | `post_pool_speed_test.force_test_list` | `[]` | 入池後不免測速名單；此名單中的 IP 每次入池後都要測速，不達標會遷移回 `ip_blacklist` |
 | `post_pool_speed_test.exempt_direct_pool_enabled` | `true` | 免測名單中的精確 IP 是否跳過掃描直接固定入池，且不計入 `valid_ip_count` / `pool_size` |
 | `post_pool_speed_test.exempt_latency_filter_enabled` | `true` | 固定免測速 IP 入池前是否先做獨立延遲篩選 |

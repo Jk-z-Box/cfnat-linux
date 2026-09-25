@@ -403,7 +403,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
   if [[ "${IP_VERSION}" == "4" ]]; then RECORD_TYPE="A"; else RECORD_TYPE="AAAA"; fi
   cat > "${CONFIG_DIR}/config.json" <<EOF
 {
-  "config_version": 24,
+  "config_version": 25,
   "listen": "${LISTEN}",
   "ip_version": ${IP_VERSION},
   "ip_sources": ["${SOURCE}"],
@@ -455,6 +455,7 @@ if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
     "min_mbps": 1,
     "timeout": "5s",
     "auto_blacklist": false,
+    "exempt_enabled": true,
     "exempt_list": [],
     "force_test_list": [],
     "exempt_direct_pool_enabled": true,

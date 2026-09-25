@@ -276,6 +276,18 @@ toggle_post_pool_exempt_direct_pool() {
   done
 }
 
+toggle_post_pool_exempt() {
+  local value
+  while true; do
+    read -r -p "是否启用 IP 入池免测速功能？关闭时保留名单内容 [y/n]: " value
+    case "${value}" in
+      y|Y|yes|YES|Yes) set_config post_pool_speed_test_exempt_enabled true && return ;;
+      n|N|no|NO|No) set_config post_pool_speed_test_exempt_enabled false && return ;;
+      *) echo "请输入 y 或 n。" >&2 ;;
+    esac
+  done
+}
+
 toggle_post_pool_exempt_latency_filter() {
   local value
   while true; do
@@ -763,6 +775,7 @@ config_menu() {
     echo " 41) 冷却恢复池检查并发开关"
     echo " 42) 冷却恢复池检查并发数"
     echo " 43) 一键清空 IP 黑名单/免测速名单/不免测速名单"
+    echo " 44) IP 入池免测速功能总开关"
     echo "  0) 返回"
     read -r -p "请选择: " choice
     case "${choice}" in
@@ -822,6 +835,7 @@ config_menu() {
       41) toggle_recovery_concurrency; pause_screen ;;
       42) edit_recovery_concurrency; pause_screen ;;
       43) clear_ip_lists; pause_screen ;;
+      44) toggle_post_pool_exempt; pause_screen ;;
       0) return ;;
       *) echo "无效选项，请重新输入。" ;;
     esac

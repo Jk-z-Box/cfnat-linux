@@ -63,6 +63,7 @@ type PostPoolSpeedTestConfig struct {
 	MinMBps                    float64  `json:"min_mbps"`
 	Timeout                    Duration `json:"timeout"`
 	AutoBlacklist              bool     `json:"auto_blacklist"`
+	ExemptEnabled              bool     `json:"exempt_enabled"`
 	ExemptList                 []string `json:"exempt_list"`
 	ForceTestList              []string `json:"force_test_list"`
 	ExemptDirectPoolEnabled    bool     `json:"exempt_direct_pool_enabled"`
@@ -159,7 +160,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		ConfigVersion:              24,
+		ConfigVersion:              25,
 		Listen:                     "0.0.0.0:1234",
 		IPVersion:                  4,
 		IPSources:                  []string{"https://www.cloudflare.com/ips-v4"},
@@ -204,7 +205,7 @@ func Defaults() Config {
 			MinMBps: 5, Timeout: Duration(10 * time.Second), MaxCandidates: 50, Concurrency: 3,
 		},
 		PostPoolSpeedTest: PostPoolSpeedTestConfig{
-			Enabled: false, MinMBps: 1, Timeout: Duration(5 * time.Second), AutoBlacklist: false, ExemptList: []string{}, ForceTestList: []string{},
+			Enabled: false, MinMBps: 1, Timeout: Duration(5 * time.Second), AutoBlacklist: false, ExemptEnabled: true, ExemptList: []string{}, ForceTestList: []string{},
 			ExemptDirectPoolEnabled: true, ExemptLatencyFilterEnabled: true, ExemptMaxLatency: Duration(800 * time.Millisecond),
 			ExemptProbeMode: "tcp", ExemptLatencyConcurrency: 20,
 			ExemptRecoveryEvictEnabled: true, ExemptRecoveryWindow: Duration(24 * time.Hour),
@@ -352,7 +353,7 @@ func Migrate(path string) (bool, error) {
 	}
 	if _, ok := raw["post_pool_speed_test"]; !ok {
 		raw["post_pool_speed_test"] = map[string]any{
-			"enabled": false, "min_mbps": 1, "timeout": "5s", "auto_blacklist": false, "exempt_list": []any{}, "force_test_list": []any{},
+			"enabled": false, "min_mbps": 1, "timeout": "5s", "auto_blacklist": false, "exempt_enabled": true, "exempt_list": []any{}, "force_test_list": []any{},
 			"exempt_direct_pool_enabled": true, "exempt_latency_filter_enabled": true, "exempt_max_latency": "800ms",
 			"exempt_probe_mode": "tcp", "exempt_latency_concurrency": 20,
 			"exempt_recovery_evict_enabled": true, "exempt_recovery_window": "24h",
@@ -374,6 +375,10 @@ func Migrate(path string) (bool, error) {
 		}
 		if _, ok := post["auto_blacklist"]; !ok {
 			post["auto_blacklist"] = false
+			changed = true
+		}
+		if _, ok := post["exempt_enabled"]; !ok {
+			post["exempt_enabled"] = true
 			changed = true
 		}
 		if _, ok := post["exempt_list"]; !ok {
@@ -502,8 +507,8 @@ func Migrate(path string) (bool, error) {
 		raw["shodan"] = map[string]any{"enabled": false, "data_dir": "/var/lib/cfnat/shodan"}
 		changed = true
 	}
-	if version, _ := raw["config_version"].(float64); int(version) < 24 {
-		raw["config_version"] = 24
+	if version, _ := raw["config_version"].(float64); int(version) < 25 {
+		raw["config_version"] = 25
 		changed = true
 	}
 	if normalizeRawExclusiveLists(raw) {
@@ -721,6 +726,12 @@ func Set(path, key, value string) error {
 			return errors.New("post_pool_speed_test_auto_blacklist 只能是 true 或 false")
 		}
 		cfg.PostPoolSpeedTest.AutoBlacklist = parsed
+	case "post_pool_speed_test_exempt_enabled":
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return errors.New("post_pool_speed_test.exempt_enabled 只能是 true 或 false")
+		}
+		cfg.PostPoolSpeedTest.ExemptEnabled = parsed
 	case "post_pool_speed_test_exempt_list":
 		cfg.PostPoolSpeedTest.ExemptList = splitNonEmptyLines(value)
 	case "post_pool_speed_test_force_test_list":
